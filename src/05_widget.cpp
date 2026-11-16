@@ -166,6 +166,10 @@ static void UiPrev() {
     if (e && e->canPrev) SendAct(Act::Prev);
 }
 
+#ifdef TP_HARNESS
+static float g_testScale = 0;  // overrides the DPI scale of the widget (renders at 150%)
+#endif
+
 // Implemented by the popup.
 static void PopupToggle(const RECT& anchor);
 static void PopupOnSnapshot();
@@ -208,12 +212,16 @@ class Widget {
             SendMessageW(tooltip_, TTM_SETMAXTIPWIDTH, 0, 600);
             ApplyTooltipTheme();
         }
+        // The visualizer sits on top of the widget: a sibling child of the
+        // taskbar, or (compatibility mode) a popup owned by the widget.
+        viz_.Create(overlay_ ? hwnd_ : taskbar, overlay_, [this] { StartAnimation(); });
         SetTimer(hwnd_, kTimerHousekeeping, 2000, nullptr);
         Relayout();
         return true;
     }
 
     void Destroy() {
+        viz_.Destroy();
         if (hwnd_) DestroyWindow(hwnd_);
         hwnd_ = nullptr;
         tooltip_ = nullptr;
@@ -234,6 +242,31 @@ class Widget {
     }
 
     void OnSnapshot() {
+        UpdateShown();
+        SyncViz();
+    }
+
+    // Tells the visualizer what the widget shows and whether it may react.
+    void SyncViz() {
+        if (!viz_.Hwnd()) return;
+        const Snapshot* e = g_ui.Eff();
+        const auto& v = GetSettings()->viz;
+        Visualizer::Context c;
+        c.on = v.enabled && visible_ && e && e->visible && !e->connectPrompt && !shown_.connect;
+        // Music on another Spotify Connect device makes no sound here.
+        bool local = e && (e->src == Src::Session ||
+                           (e->src == Src::Spotify && (e->deviceName.empty() || g_localSpotifyPlaying ||
+                                                       IEquals(e->deviceName, ThisComputerName()))));
+        c.gateOpen = !v.onlyWhenPlaying || (e && e->playing && local);
+        if (e) c.aumid = e->src == Src::Spotify ? std::wstring(L"Spotify.exe") : e->aumid;
+        c.hasAccent = e && e->art;
+        if (c.hasAccent) c.accent = e->art->accent;
+        c.light = light_;
+        c.scale = scale_;
+        viz_.SetContext(c);
+    }
+
+    void UpdateShown() {
         const Snapshot* e = g_ui.Eff();
         bool want = e && e->visible;
         if (want && winAlpha_ < 0.02f) playT_.Snap(e->playing ? 0.f : 1.f);  // no morph when appearing
@@ -294,6 +327,9 @@ class Widget {
         if (!hwnd_ || !taskbar_) return;
         UINT dpi = GetDpiForWindow(taskbar_);
         scale_ = (dpi ? dpi : 96) / 96.f;
+#ifdef TP_HARNESS
+        if (g_testScale > 0) scale_ = g_testScale;
+#endif
         g_uiScaleMilli = (int)std::lround(scale_ * 1000);
         RECT rc{};
         GetClientRect(taskbar_, &rc);
@@ -301,6 +337,7 @@ class Widget {
         tbClientWidth_ = rc.right - rc.left;
         widthTarget_ = ContentWidth(shown_);
         if (!widthAnim_) width_ = widthTarget_;
+        SyncViz();
         Reposition();
         Render();
         PopupRelayout();
@@ -309,6 +346,8 @@ class Widget {
     void OnSettingsChanged() {
         light_ = IsLightTaskbar();
         ApplyTooltipTheme();
+        SyncViz();
+        viz_.OnSettingsChanged();
         Relayout();
     }
 
@@ -324,9 +363,27 @@ class Widget {
         widthAnim_ = false;
         width_ = widthTarget_ = ContentWidth(shown_);
         hover_ = hover;
+        volT_.Snap(volT_.to);
         Render();
     }
     const Surface& DebugSurface() const { return surf_; }
+    Visualizer& DebugViz() { return viz_; }
+    // Where the visualizer window sits relative to the widget.
+    int DebugVizOffset() const { return viz_.DebugX() - (int)std::lround(LeftPx()); }
+    // A frozen frame of the volume indicator: how far it rolled in, where the
+    // bar is (-1: at the level) and how much of the bump is left.
+    void DebugVolume(int level, bool muted, const std::wstring& message, float shown, float fill = -1,
+                     float bump = 0) {
+        volLevel_ = level;
+        volMuted_ = muted;
+        volMessage_ = message;
+        volT_.Snap(shown);
+        volFillT_.Snap(fill >= 0 ? fill : (float)std::max(0, level));
+        volBumpT_.Snap(bump);
+        volPctW_.Snap(level >= 0 ? TextWidth(VolumeText(level), ArtistFont()) : 0.f);
+    }
+    std::pair<float, float> DebugVolumeFill() const { return {volFillT_.from, volFillT_.to}; }
+    void DebugWheel(int delta, WORD keys) { OnWheel(delta, keys); }
 #endif
 
     static LRESULT CALLBACK Proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -343,7 +400,8 @@ class Widget {
     }
 
    private:
-    enum { kTimerAnim = 1, kTimerHousekeeping = 2 };
+    enum { kTimerAnim = 1, kTimerHousekeeping = 2, kTimerVolumeSend = 3, kTimerVolumeHide = 4 };
+    using VizPos = Settings::Viz::Pos;
     enum Part { kNone = -1, kInfo = 0, kPrev = 1, kPlay = 2, kNext = 3 };
     enum class Phase { Idle, FadeOut, FadeIn };
 
@@ -382,10 +440,42 @@ class Widget {
     IDWriteTextFormat* ArtistFont() const { return g_gfx->Font(false, S(11.5f), DWRITE_FONT_WEIGHT_NORMAL); }
     float LeftPx() const { return S((float)GetSettings()->leftMargin); }
 
+    // The visualizer's slot: its full width, and how much of it is open now
+    // (it grows and shrinks when sound starts and stops).
+    bool VizOn(const Content& c) const { return GetSettings()->viz.enabled && !c.connect && viz_.Hwnd(); }
+    float SlotFull(const Content& c) const {
+        return VizOn(c) ? std::round(S((float)GetSettings()->viz.width + 8)) : 0.f;
+    }
+    float SlotNow() const { return SlotFull(shown_) * viz_.SlotValue(); }
+    VizPos SlotPos() const { return GetSettings()->viz.position; }
+    // Full widget width: the content plus the open part of the slot.
+    float TotalW() const { return std::ceil(width_ + SlotNow()); }
+
+    float ButtonsLeft(float W) const {
+        return W - PadRight() - 3 * Btn() - (SlotPos() == VizPos::AfterControls ? SlotNow() : 0);
+    }
+    float CoverLeft() const { return Pad() + (SlotPos() == VizPos::BeforeCover ? SlotNow() : 0); }
+    // The slot's left and right edge in widget coordinates.
+    std::pair<float, float> SlotRange(const Content& c, float W) const {
+        float s = SlotNow();
+        if (SlotPos() == VizPos::BeforeCover) return {Pad() - S(4), Pad() - S(4) + s};
+        if (!Controls(c)) return {W - s, W};
+        float bl = ButtonsLeft(W);
+        if (SlotPos() == VizPos::AfterControls) return {bl + 3 * Btn(), bl + 3 * Btn() + s};
+        return {bl - s, bl};
+    }
+    // Where the title and artist must end.
+    float TextRight(const Content& c, float W) const {
+        float right = InfoRect(c, W).right - GapText();
+        if (SlotPos() == VizPos::BeforeControls || (!Controls(c) && SlotPos() == VizPos::AfterControls))
+            right -= SlotNow();
+        return right;
+    }
+
     float TextW(const Content& c) const {
         float tw = std::max(TextWidth(c.title, TitleFont()), TextWidth(c.artist, ArtistFont()));
         tw = std::min(tw, S((float)GetSettings()->maxTextWidth));
-        float fixed = FixedW(c);
+        float fixed = FixedW(c) + SlotFull(c);
         int start = g_startButtonLeft;
         float left = LeftPx();
         // Never run into the centered taskbar icons.
@@ -422,17 +512,17 @@ class Widget {
     }
 
     D2D1_RECT_F InfoRect(const Content& c, float W) const {
-        float right = Controls(c) ? W - PadRight() - 3 * Btn() : W;
+        float right = Controls(c) ? ButtonsLeft(W) : W;
         float hh = HoverH();
         return RectF(0, (heightPx_ - hh) / 2, std::max(right, 1.f), (heightPx_ + hh) / 2);
     }
     D2D1_RECT_F ButtonRect(int i, float W) const {
-        float x0 = W - PadRight() - 3 * Btn() + i * Btn();
+        float x0 = ButtonsLeft(W) + i * Btn();
         return RectF(x0, 0, x0 + Btn(), (float)heightPx_);
     }
 
     int HitTest(float x, float y) const {
-        float W = std::ceil(width_);
+        float W = TotalW();
         if (x < 0 || y < 0 || x >= W || y >= heightPx_) return kNone;
         if (Controls(shown_)) {
             for (int i = 0; i < 3; i++)
@@ -457,16 +547,38 @@ class Widget {
             TTTOOLINFOW ti{sizeof(ti)};
             ti.hwnd = hwnd_;
             ti.uId = 1;
-            D2D1_RECT_F r = InfoRect(shown_, std::ceil(width_));
+            D2D1_RECT_F r = InfoRect(shown_, TotalW());
             ti.rect = RECT{(LONG)r.left, 0, (LONG)r.right, heightPx_};
             SendMessageW(tooltip_, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
         }
     }
 
+    // Keeps the widget (and the visualizer just above it) over the taskbar's
+    // own content.
     void EnsureOnTop() {
         if (overlay_ || !hwnd_) return;
-        if (GetWindow(taskbar_, GW_CHILD) != hwnd_)
-            SetWindowPos(hwnd_, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        const UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+        HWND viz = viz_.Hwnd();
+        bool vizShown = viz_.Shown();
+        HWND top = GetWindow(taskbar_, GW_CHILD);
+        if (top != hwnd_ && !(vizShown && top == viz && GetWindow(viz, GW_HWNDNEXT) == hwnd_)) {
+            SetWindowPos(hwnd_, HWND_TOP, 0, 0, 0, 0, flags);
+            top = hwnd_;
+        }
+        if (vizShown && top == hwnd_) SetWindowPos(viz, HWND_TOP, 0, 0, 0, 0, flags);
+    }
+
+    // Moves the visualizer window to its slot.
+    void PlaceViz(float W) {
+        if (!viz_.Hwnd()) return;
+        float full = SlotFull(shown_);
+        auto [x0, x1] = SlotRange(shown_, W);
+        int winW = std::max(1, (int)std::ceil(full));
+        int left = (int)std::lround((x0 + x1) / 2 - winW / 2.f);
+        POINT origin = overlay_ ? screenPos_ : POINT{(LONG)std::lround(LeftPx()), 0};
+        float squeeze = full > 0 ? Clamp01((x1 - x0) / full) : 0.f;
+        float alpha = visible_ || winAnim_ ? Clamp01(winAlpha_) : 0.f;
+        viz_.Place(origin.x + left, origin.y, winW, heightPx_, squeeze, alpha);
     }
 
     void ApplyTooltipTheme() {
@@ -541,6 +653,17 @@ class Widget {
         }
         if (hlT_.Step()) active = true;
         if (playT_.Step()) active = true;
+        if (volT_.Step()) active = true;
+        if (volFillT_.Step()) active = true;
+        if (volBumpT_.Step()) active = true;
+        if (volPctW_.Step()) active = true;
+        if (viz_.StepSlot()) {
+            active = true;
+            slotAnim_ = true;
+        } else if (slotAnim_) {
+            slotAnim_ = false;
+            Reposition();  // the tooltip area follows the final width
+        }
         if (winAlpha_ > 0 || winAnim_) Render();
         if (!active) {
             KillTimer(hwnd_, kTimerAnim);
@@ -550,7 +673,7 @@ class Widget {
 
     void Render() {
         if (!hwnd_ || !g_gfx) return;
-        int W = std::max(1, (int)std::ceil(width_));
+        int W = std::max(1, (int)TotalW());
         int H = std::max(1, heightPx_);
         if (!surf_.Resize(W, H)) return;
         ID2D1RenderTarget* rt = surf_.Begin();
@@ -562,6 +685,7 @@ class Widget {
         }
         BYTE alpha = (BYTE)std::lround(Clamp01(winAlpha_) * 255);
         surf_.Present(hwnd_, overlay_ ? &screenPos_ : nullptr, alpha);
+        PlaceViz((float)W);
     }
 
     void InvalidateLater() { PostMessageW(hwnd_, WM_TP_RELAYOUT, 0, 0); }
@@ -593,7 +717,7 @@ class Widget {
 
         float ca = contentAlpha_;
         float cs = CoverSize();
-        D2D1_RECT_F cover = RectXYWH(Pad(), std::round((heightPx_ - cs) / 2), cs, cs);
+        D2D1_RECT_F cover = RectXYWH(CoverLeft(), std::round((heightPx_ - cs) / 2), cs, cs);
         float coverRadius = S(5);
         if (c.connect) {
             DrawSpotifyLogo(surf_, rt, Center(cover), cs * 0.78f, ca);
@@ -612,20 +736,34 @@ class Widget {
         }
 
         float tw = TextW(c);
+        // While scrolling, the artist line (or a lone title) rolls up and out
+        // and the volume rolls in from below (and back when it hides).
+        float vi = Clamp01(volT_.value);
         if (tw > 0) {
             float x = cover.right + GapCover();
-            float maxRight = InfoRect(c, W).right - GapText();
+            float maxRight = TextRight(c, W);
             float w = std::max(0.f, std::min(tw, maxRight - x));
             float mid = heightPx_ / 2.f;
-            if (!c.artist.empty()) {
+            bool artist = !c.artist.empty();
+            if (artist)
                 DrawTextLine(rt, c.title, TitleFont(), RectF(x, mid - S(17), x + w, mid + S(0.5f)),
                              surf_.Brush(WithAlpha(fg, fg.a * ca)));
-                DrawTextLine(rt, c.artist, ArtistFont(), RectF(x, mid - S(0.5f), x + w, mid + S(16)),
-                             surf_.Brush(WithAlpha(fg2, fg2.a * ca)));
-            } else {
-                DrawTextLine(rt, c.title, TitleFont(), RectF(x, mid - S(10), x + w, mid + S(10)),
-                             surf_.Brush(WithAlpha(fg, fg.a * ca)));
+            D2D1_RECT_F line = artist ? RectF(x, mid - S(0.5f), x + w, mid + S(16)) : RectF(x, mid - S(10), x + w, mid + S(10));
+            float roll = Height(line) * 0.55f;
+            bool rolling = vi > 0.01f && vi < 0.99f;
+            if (rolling) rt->PushAxisAlignedClip(line, D2D1_ANTIALIAS_MODE_ALIASED);
+            if (vi < 0.99f) {
+                D2D1_RECT_F out = RectF(line.left, line.top - roll * vi, line.right, line.bottom - roll * vi);
+                if (artist)
+                    DrawTextLine(rt, c.artist, ArtistFont(), out, surf_.Brush(WithAlpha(fg2, fg2.a * ca * (1 - vi))));
+                else
+                    DrawTextLine(rt, c.title, TitleFont(), out, surf_.Brush(WithAlpha(fg, fg.a * ca * (1 - vi))));
             }
+            if (vi > 0.01f) {
+                float d = roll * (1 - vi);
+                DrawVolume(rt, RectF(line.left, line.top + d, line.right, line.bottom + d), vi, fg, fg2);
+            }
+            if (rolling) rt->PopAxisAlignedClip();
         }
 
         if (Controls(c)) {
@@ -642,6 +780,131 @@ class Widget {
             if (m > 0.001f)
                 DrawTransport(rt, Transport::Play, pc, S(14) * (0.65f + 0.35f * m), surf_.Brush(WithAlpha(pcol, pcol.a * m)));
         }
+    }
+
+    static std::wstring VolumeText(int level) { return level < 0 ? L"--" : std::to_wstring(level) + L"%"; }
+
+    // A speaker icon, a small bar and the percentage (or a short message).
+    void DrawVolume(ID2D1RenderTarget* rt, D2D1_RECT_F r, float a, D2D1_COLOR_F fg, D2D1_COLOR_F fg2) {
+        if (!volMessage_.empty()) {
+            DrawTextLine(rt, volMessage_, ArtistFont(), r, surf_.Brush(WithAlpha(fg2, fg2.a * a)));
+            return;
+        }
+        float cy = std::round((r.top + r.bottom) / 2);
+        // The bar and the number follow the level smoothly; each step gives
+        // the bar and the speaker a short bump.
+        float level = Clamp01(volFillT_.value / 100.f);
+        int v = (int)std::lround(level * 100);
+        float bump = Clamp01(volBumpT_.value);
+        Glyph g = volMuted_ ? Glyph::Mute
+                  : v == 0  ? Glyph::Volume0
+                  : v < 34  ? Glyph::Volume1
+                  : v < 67  ? Glyph::Volume2
+                            : Glyph::Volume3;
+        float iconW = S(15);
+        DrawIcon(rt, g, D2D1::Point2F(r.left + iconW / 2, cy), S(12) * (1 + 0.14f * bump),
+                 surf_.Brush(WithAlpha(fg, fg.a * a)));
+        std::wstring pct = VolumeText(volLevel_ < 0 ? -1 : v);
+        // The number sits right after the bar; the bar takes the rest. When
+        // the number gets a digit more or less, the bar's end slides.
+        float pctW = volPctW_.value > 0 ? volPctW_.value : TextWidth(pct, ArtistFont());
+        float gap = S(8);  // room for the knob
+        float barL = r.left + iconW + S(6), barR = r.right - pctW - gap;
+        if (barR - barL >= S(8)) {
+            // Like the popup's slider while it's used: thicker, in the cover's
+            // accent color, with a knob. Each step makes it pop, then it
+            // settles back to white.
+            float bh = S(4) + S(2) * bump;
+            float dim = volMuted_ ? 0.4f : 1.f;
+            D2D1_RECT_F track = RectF(barL, cy - bh / 2, barR, cy + bh / 2);
+            rt->FillRoundedRectangle(D2D1::RoundedRect(track, bh / 2, bh / 2), surf_.Brush(WithAlpha(fg, 0.22f * a)));
+            D2D1_COLOR_F fillCol = fg;
+            if (!light_ && shown_.art) {
+                D2D1_COLOR_F ac = shown_.art->accent;
+                float t = 0.25f + 0.75f * bump;
+                fillCol = D2D1_COLOR_F{fg.r + (ac.r - fg.r) * t, fg.g + (ac.g - fg.g) * t, fg.b + (ac.b - fg.b) * t, fg.a};
+            }
+            float fill = barL + (barR - barL) * level;
+            if (level > 0.001f)
+                rt->FillRoundedRectangle(
+                    D2D1::RoundedRect(RectF(barL, cy - bh / 2, std::max(fill, barL + bh), cy + bh / 2), bh / 2, bh / 2),
+                    surf_.Brush(WithAlpha(fillCol, fillCol.a * a * dim)));
+            float kr = S(3.5f) + S(2.5f) * bump;
+            rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(fill, cy), kr, kr), surf_.Brush(WithAlpha(fg, fg.a * a * dim)));
+            DrawTextLine(rt, pct, ArtistFont(), RectF(barR + gap, r.top, r.right, r.bottom),
+                         surf_.Brush(WithAlpha(fg2, fg2.a * a)));
+        } else {
+            DrawTextLine(rt, pct, ArtistFont(), RectF(r.left + iconW + S(3), r.top, r.right, r.bottom),
+                         surf_.Brush(WithAlpha(fg2, fg2.a * a)));
+        }
+    }
+
+    // ---- Scroll to change the volume ----
+
+    void OnWheel(int delta, WORD keys) {
+        auto set = GetSettings();
+        const Snapshot* e = g_ui.Eff();
+        if (!set->scroll.enabled || !visible_ || !e || !e->visible || shown_.connect) return;
+        if (Tick() - wheelTick_ > 500) wheelAcc_ = 0;
+        wheelTick_ = Tick();
+        int step = (keys & MK_SHIFT) ? 1 : set->scroll.step;
+        int change = WheelSteps(wheelAcc_, set->scroll.invert ? -delta : delta, step);
+        if (!change) return;
+        if (!set->scroll.system && e->src == Src::Spotify) {
+            // Spotify's own volume (also works for phones and speakers).
+            if (!e->canVolume) {
+                // Some devices (e.g. phones) don't allow it.
+                ShowVolume(-1, false, L"Volume locked");
+                return;
+            }
+            int old = std::clamp(e->volume, 0, 100);
+            int v = std::clamp(old + change, 0, 100);
+            SetSpotifyVolume(v);  // (refreshes the snapshot: `e` is stale after this)
+            ShowVolume(v, false, L"", old);
+            return;
+        }
+        bool system = set->scroll.system || e->src != Src::Session || e->aumid.empty();
+        g_mixer.Nudge(system, system ? L"" : e->aumid, change, hwnd_);
+    }
+
+    // Sends Spotify volume changes at most about four times a second.
+    void SetSpotifyVolume(int v) {
+        g_ui.OverrideVolume(v);
+        PopupOnSnapshot();
+        pendingSpotifyVolume_ = v;
+        if (Tick() - lastSpotifyVolumeSend_ >= 250) {
+            SendAct(Act::Volume, v);
+            lastSpotifyVolumeSend_ = Tick();
+            pendingSpotifyVolume_ = -1;
+        } else {
+            SetTimer(hwnd_, kTimerVolumeSend, 260, nullptr);
+        }
+    }
+
+    // `from` is the level before this change (-1 if unknown): the bar then
+    // slides from there even when it just appeared.
+    void ShowVolume(int level, bool muted, std::wstring message, int from = -1) {
+        if (!GetSettings()->scroll.indicator) return;
+        bool anim = GetSettings()->popupAnimations;
+        bool barUp = volT_.to > 0.5f && volMessage_.empty() && volLevel_ >= 0;
+        if (level >= 0) {
+            if (!barUp) volFillT_.Snap((float)(from >= 0 ? from : level));
+            // Every notch pops the bar; a smaller pop when it's already at 0 or 100.
+            bool changed = barUp ? level != volLevel_ : from >= 0 && from != level;
+            volBumpT_.Snap(changed ? 1.f : std::max(volBumpT_.value, 0.5f));
+            volBumpT_.To(0.f, anim ? 420.f : 0.f);
+            volFillT_.To((float)level, anim ? 260.f : 0.f, Ease::OutQuint);
+            float pw = TextWidth(VolumeText(level), ArtistFont());
+            if (!barUp) volPctW_.Snap(pw);
+            else volPctW_.To(pw, anim ? 200.f : 0.f);
+        }
+        volLevel_ = level;
+        volMuted_ = muted;
+        volMessage_ = std::move(message);
+        volT_.To(1.f, anim ? 200.f : 0.f);
+        SetTimer(hwnd_, kTimerVolumeHide, volMessage_.empty() ? 1400 : 2400, nullptr);
+        StartAnimation();
+        Render();
     }
 
     void SetHover(int h) {
@@ -732,6 +995,15 @@ class Widget {
                     Render();
                 }
                 return 0;
+            case WM_MOUSEWHEEL:
+                OnWheel(GET_WHEEL_DELTA_WPARAM(wp), GET_KEYSTATE_WPARAM(wp));
+                return 0;
+            case WM_TP_VOLUME:
+                if (wp & kVolFailed) ShowVolume(-1, false, L"Volume unavailable");
+                else
+                    ShowVolume((int)(wp & 0xFF), (wp & kVolMuted) != 0, L"",
+                               (wp & kVolHasBefore) ? (int)((wp >> 16) & 0xFF) : -1);
+                return 0;
             case WM_NOTIFY: {
                 auto* hdr = (NMHDR*)lp;
                 if (hdr->hwndFrom == tooltip_ && hdr->code == TTN_GETDISPINFOW) {
@@ -746,12 +1018,28 @@ class Widget {
             case WM_TIMER:
                 if (wp == kTimerAnim) {
                     Animate();
+                } else if (wp == kTimerVolumeSend) {
+                    KillTimer(hwnd_, kTimerVolumeSend);
+                    if (pendingSpotifyVolume_ >= 0) {
+                        SendAct(Act::Volume, pendingSpotifyVolume_);
+                        lastSpotifyVolumeSend_ = Tick();
+                        pendingSpotifyVolume_ = -1;
+                    }
+                } else if (wp == kTimerVolumeHide) {
+                    KillTimer(hwnd_, kTimerVolumeHide);
+                    volT_.To(0.f, GetSettings()->popupAnimations ? 260.f : 0.f);
+                    StartAnimation();
+                    Render();
                 } else if (wp == kTimerHousekeeping) {
                     RECT rc{};
                     GetClientRect(taskbar_, &rc);
                     UINT dpi = GetDpiForWindow(taskbar_);
+                    float scale = (dpi ? dpi : 96) / 96.f;
+#ifdef TP_HARNESS
+                    if (g_testScale > 0) scale = g_testScale;
+#endif
                     if (rc.bottom - rc.top != heightPx_ || rc.right - rc.left != tbClientWidth_ ||
-                        std::fabs((dpi ? dpi : 96) / 96.f - scale_) > 0.001f) {
+                        std::fabs(scale - scale_) > 0.001f) {
                         Relayout();
                     } else if (overlay_) {
                         RECT tr{};
@@ -781,8 +1069,11 @@ class Widget {
                 return 0;
             case WM_NCDESTROY: {
                 HWND h = hwnd_;
+                viz_.Destroy();
                 KillTimer(h, kTimerAnim);
                 KillTimer(h, kTimerHousekeeping);
+                KillTimer(h, kTimerVolumeSend);
+                KillTimer(h, kTimerVolumeHide);
                 surf_.Release();
                 SetWindowLongPtrW(h, GWLP_USERDATA, 0);
                 hwnd_ = nullptr;
@@ -822,6 +1113,22 @@ class Widget {
     int hlPart_ = kNone;  // part whose highlight is fading
     Tween hlT_, playT_;
     std::wstring tipText_;
+
+    Visualizer viz_;
+    bool slotAnim_ = false;
+
+    // Scroll volume.
+    float wheelAcc_ = 0;
+    ULONGLONG wheelTick_ = 0;
+    int pendingSpotifyVolume_ = -1;
+    ULONGLONG lastSpotifyVolumeSend_ = 0;
+    Tween volT_;      // volume indicator visibility (rolls in and out)
+    Tween volFillT_;  // the bar's level, 0..100, follows changes smoothly
+    Tween volBumpT_;  // 1 right after a change, fading to 0
+    Tween volPctW_;   // width of the percentage text (px), slides when digits change
+    int volLevel_ = -1;
+    bool volMuted_ = false;
+    std::wstring volMessage_;
 };
 
 }  // namespace tp

@@ -24,6 +24,9 @@ static void RegisterClasses() {
     wc.lpfnWndProc = Widget::Proc;
     wc.lpszClassName = Widget::kClass;
     RegisterClassExW(&wc);
+    wc.lpfnWndProc = Visualizer::Proc;
+    wc.lpszClassName = Visualizer::kClass;
+    RegisterClassExW(&wc);
     wc.lpfnWndProc = Popup::Proc;
     wc.lpszClassName = Popup::kClass;
     RegisterClassExW(&wc);
@@ -35,6 +38,7 @@ static void RegisterClasses() {
 
 static void UnregisterClasses() {
     UnregisterClassW(Widget::kClass, ModuleInstance());
+    UnregisterClassW(Visualizer::kClass, ModuleInstance());
     UnregisterClassW(Popup::kClass, ModuleInstance());
     UnregisterClassW(Popup::kClassComposited, ModuleInstance());
 }
@@ -217,6 +221,8 @@ static void ModUninit() {
     }
     g_attached = false;
     g_taskbarHwnd = nullptr;
+    g_tap.Shutdown();
+    g_vol.Stop();
     Http::CancelAll();
     g_core.Sync([] { g_controller.Shutdown(); });
     g_img.Sync([] { ReleaseImgThreadObjects(); });

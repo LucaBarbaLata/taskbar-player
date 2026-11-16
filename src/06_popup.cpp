@@ -5,48 +5,6 @@ namespace tp {
 // Opening the source app / track
 // ============================================================================
 
-static const PROPERTYKEY kPKEY_AppUserModel_ID = {
-    {0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}}, 5};
-
-struct FindWindowCtx {
-    std::wstring aumid, exe;
-    HWND found = nullptr;
-};
-
-static BOOL CALLBACK FindAppWindowProc(HWND hwnd, LPARAM lp) {
-    auto* ctx = (FindWindowCtx*)lp;
-    if (!IsWindowVisible(hwnd) || GetWindow(hwnd, GW_OWNER)) return TRUE;
-    if (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) return TRUE;
-    if (GetWindowTextLengthW(hwnd) == 0) return TRUE;
-    com_ptr<IPropertyStore> store;
-    if (SUCCEEDED(SHGetPropertyStoreForWindow(hwnd, __uuidof(IPropertyStore), store.put_void()))) {
-        PROPVARIANT pv;
-        PropVariantInit(&pv);
-        if (SUCCEEDED(store->GetValue(kPKEY_AppUserModel_ID, &pv)) && pv.vt == VT_LPWSTR &&
-            pv.pwszVal && _wcsicmp(pv.pwszVal, ctx->aumid.c_str()) == 0) {
-            ctx->found = hwnd;
-        }
-        PropVariantClear(&pv);
-        if (ctx->found) return FALSE;
-    }
-    if (!ctx->exe.empty()) {
-        DWORD pid = 0;
-        GetWindowThreadProcessId(hwnd, &pid);
-        HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-        if (proc) {
-            wchar_t path[MAX_PATH * 2];
-            DWORD len = ARRAYSIZE(path);
-            if (QueryFullProcessImageNameW(proc, 0, path, &len)) {
-                const wchar_t* name = wcsrchr(path, L'\\');
-                name = name ? name + 1 : path;
-                if (_wcsicmp(name, ctx->exe.c_str()) == 0) ctx->found = hwnd;
-            }
-            CloseHandle(proc);
-        }
-    }
-    return ctx->found ? FALSE : TRUE;
-}
-
 static void ActivateApp(const std::wstring& aumid) {
     if (aumid.empty()) return;
     FindWindowCtx ctx;
@@ -98,18 +56,6 @@ static std::wstring WindowDesc(HWND h) {
         CloseHandle(proc);
     }
     return std::wstring(cls) + L" (" + exe + L")";
-}
-
-static std::wstring ThisComputerName() {
-    static std::wstring name = [] {
-        wchar_t buf[256];
-        DWORD len = ARRAYSIZE(buf);
-        if (GetComputerNameExW(ComputerNameDnsHostname, buf, &len)) return std::wstring(buf, len);
-        len = ARRAYSIZE(buf);
-        if (GetComputerNameW(buf, &len)) return std::wstring(buf, len);
-        return std::wstring();
-    }();
-    return name;
 }
 
 static std::wstring DeviceTypeLabel(const std::wstring& type) {

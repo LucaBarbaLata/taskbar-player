@@ -25,14 +25,50 @@
   ok   !Json::Parse("[1,2", bad)
   ok   Json::Parse("[true,false]", arr) && arr.size() == 2 && arr[0].Bool() && !arr[1].Bool(true)
 [poll pacing]
-  ok   p.interval == 1000
-  ok   p.interval == 1000
-  ok   p.interval == 1500
-  ok   p.interval == 1500
-  ok   p.interval == 4000
-  ok   p.interval == 4000
-  ok   p.interval == 3750
-  ok   p.interval == 1000
+  ok   p.percent == 100 && p.Scale(5000) == 5000
+  ok   p.percent == 100
+  ok   p.percent == 150 && p.Scale(5000) == 7500
+  ok   p.percent == 150
+  ok   p.percent == 300
+  ok   p.percent == 300
+  ok   p.percent == 275
+  ok   p.percent == 100
+[poll schedule]
+  ok   PollDelay(s, pace) == 5000
+  ok   PollDelay(s, pace) == 2000
+  ok   PollDelay(s, pace) == 15000
+  ok   PollDelay(s, pace) == 3300
+  ok   PollDelay(s, pace) == 1000
+  ok   PollDelay(s, pace) == 1500
+  ok   PollDelay(s, pace) == 5000
+  ok   PollDelay(paused, pace) == 15000
+  ok   PollDelay(paused, pace) == 30000
+  ok   PollDelay(paused, pace) == 3000
+  ok   PollDelay(idle, pace) == 60000
+  ok   PollDelay(idle, pace) == 3000
+  ok   PollDelay(idle, pace) == 30000
+  ok   PollDelay(bad, pace) == 3000
+  ok   PollDelay(bad, pace) == 60000
+  ok   PollDelay(s, pace) == 10000
+  Connect device: 727 polls in an hour, track changes shown at most 800 ms late
+  ok   remote.first < 800
+  ok   remote.second <= 1000
+  local app playing: 253 polls in an hour, track changes shown at most 800 ms late
+  ok   local.first < 300
+[rate limit waits]
+  ok   ApiErrorReason(R"({"error":{"status":429,"message":"Too many requests","reason":"QUOTA_EXCEEDED"}})") == "QUOTA_EXCEEDED"
+  ok   ApiErrorReason("").empty() && ApiErrorReason("Too many requests").empty()
+  ok   RateLimitWaitMs(1, 3, false) == 3000
+  ok   RateLimitWaitMs(1, 0, false) == 5000
+  ok   RateLimitWaitMs(5, 3, false) == 3000
+  ok   RateLimitWaitMs(6, 3, false) == 120000
+  ok   RateLimitWaitMs(20, 3, false) == 1800000
+  ok   RateLimitWaitMs(1, 0, true) == 120000
+  ok   RateLimitWaitMs(2, 0, true) == 300000
+  ok   RateLimitWaitMs(3, 0, true) == 600000
+  ok   RateLimitWaitMs(9, 0, true) == 1800000
+  ok   RateLimitWaitMs(1, 600, true) == 600000
+  ok   RateLimitWaitMs(1, 70000, true) == 1800000
 [rate limit families]
   ok   FamilyOf(L"/me/player?additional_types=episode") == ApiFamily::Player
   ok   FamilyOf(L"/me/player/next") == ApiFamily::Player
@@ -40,24 +76,82 @@
   ok   FamilyOf(L"/me/library?uris=x") == ApiFamily::Library
   ok   lib.status == 429 && lib.throttled
   ok   !player.throttled
-[387:Trace] Waiting 400 ms for Spotify's rate limit before /me/player/next
+[521:Trace] Waiting 400 ms for Spotify's rate limit before /me/player/next
   waited 422 ms
   ok   waited >= 350 && waited < 1000
   ok   Tick() >= g_retryUntil[(int)ApiFamily::Player]
+[spectrum]
+  ok   covered
+  1 kHz full scale: -107.8 -98.7 -75.8 2.1 -88.8 -103.7 dB
+  ok   loudest(t1k) == 3
+  ok   t1k[3] > -1.f && t1k[3] < 4.f
+  ok   t1k[0] < -40 && t1k[5] < -40
+  ok   loudest(t100) == 0
+  ok   loudest(t6k) == 5
+  ok   silent[3] < -100
+  ok   lv[3] == 1.f && lv[0] == 0.f
+  ok   lv[3] == 0.f
+  ok   lv[3] > 0.95f && lv[0] < 0.05f
+  ok   lv[3] == 0.f
+  ok   l2[3] > l1[3]
+  ok   L48.count == 48 && none
+  ok   L44.count == 6 && !L44.bands[5].empty()
+[scroll steps]
+  ok   WheelSteps(acc, 120, 5) == 5
+  ok   WheelSteps(acc, -120, 5) == -5
+  ok   total == 5
+  ok   total == 0
+  ok   total == 1
+  ok   WheelSteps(acc, 60, 5) == 2
+  ok   WheelSteps(acc, 12, 5) == 1
+  ok   WheelSteps(acc, -60, 5) == -2
+[app audio ids]
+  ok   ResolveAppAudio(L"Spotify.exe").exe == L"spotify.exe"
+  ok   ResolveAppAudio(L"SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify").exe == L"spotify.exe"
+  ok   store.package == L"AppleInc.AppleMusicWin_nzyj5cx40ttey" && store.exe.empty()
+  ok   ResolveAppAudio(L"C:\\Program Files\\VideoLAN\\VLC\\vlc.exe").exe == L"vlc.exe"
+  ok   guess.exe == L"nosuchplayerxyz.exe" && guess.rootPid == 0
+  ok   self.rootPid == GetCurrentProcessId()
+[new settings]
+  ok   s->scroll.enabled && !s->scroll.system && s->scroll.step == 5 && s->scroll.indicator
+  ok   s->viz.enabled && s->viz.style == Settings::Viz::Style::Bars && s->viz.width == 32 && s->viz.bars == 6
+  ok   s->viz.colorMode == Settings::Viz::Color::Accent && s->viz.color == 0xFF1ED760
+  ok   s->viz.whenSilent == Settings::Viz::Silent::Shrink && s->viz.silenceDelayMs == 2000
+  ok   s->scroll.system && s->scroll.step == 25
+  ok   s->viz.style == Settings::Viz::Style::Wave && s->viz.colorMode == Settings::Viz::Color::Rainbow
+  ok   s->viz.color == 0xFF336699 && s->viz.appOnly && s->viz.whenSilent == Settings::Viz::Silent::Rest
+  ok   s->viz.bars == 48 && s->viz.maxHz >= s->viz.minHz * 2
 [network]
   GET /me/player without a token -> 401
   ok   r.status == 401
+[quota block (fake Spotify server)]
+  ok   srv.Start()
+[521:Trace] Spotify quota used up on GET /me/player?additional_types=episode (reason 'QUOTA_EXCEEDED', Retry-After '', 1 in a row): next request in 120 s
+  ok   r1.status == 429 && !r1.throttled && srv.hits == 1
+  next request in 120000 ms
+  ok   left > 110000 && left <= 120000
+  ok   r2.throttled && srv.hits == 1
+  ok   cmd.throttled && Tick() - t0 < 500
+[521:Trace] Spotify quota used up on GET /me/player (reason 'QUOTA_EXCEEDED', Retry-After '', 2 in a row): next request in 300 s
+  ok   srv.hits == 2 && left > 290000 && left <= 300000
+  ok   lib.status == 200 && srv.hits == 3
+[521:Trace] Spotify rate limit on GET /me/player (reason '', Retry-After '2', 1 in a row): next request in 2 s
+  ok   p.status == 429 && p.retryAfter == 2 && p.retryAfterText == L"2"
+  ok   left > 1500 && left <= 2000
+[521:Trace] Spotify quota used up on GET /me/player (reason 'QUOTA_EXCEEDED', Retry-After '68167', 1 in a row): next request in 1800 s
+  ok   p.retryAfter == 68167 && left > 1790000 && left <= 1800000
+  ok   p.status == 200 && g_limitStreak[P] == 0 && RetryWaitLeftMs(ApiFamily::Player) == 0
 [sign-in listener]
-[387:Trace] Sign-in started (client id length 19, port 8974)
-[387:Trace] Listening on 127.0.0.1:8974
+[521:Trace] Sign-in started (client id length 19, port 8974)
+[521:Trace] Listening on 127.0.0.1:8974
   ok   openedUrl.find("redirect_uri=http%3A%2F%2F127.0.0.1%3A8974%2Fcallback") != std::string::npos
   ok   openedUrl.find("code_challenge_method=S256") != std::string::npos
-[387:Trace] Sign-in listener got a request for /nope
+[521:Trace] Sign-in listener got a request for /nope
   ok   wrong.status == 404
-[387:Trace] Sign-in listener got a request for /callback
+[521:Trace] Sign-in listener got a request for /callback
   ok   cb.status == 200 && cb.body.find("You're connected") != std::string::npos
-[387:Trace] Token exchange failed: 400 invalid_client
-[387:Trace] Sign-in finished: success=0 cancelled=0 error='Spotify sign-in failed (400)'
+[521:Trace] Token exchange failed: 400 invalid_client
+[521:Trace] Sign-in finished: success=0 cancelled=0 error='Spotify sign-in failed (400)'
   ok   !g_auth.HasToken()
 [remote feed]
   ok   mapping != nullptr
@@ -70,7 +164,7 @@
   ok   r && r->stampMs > 1700000000000ULL && r->posStampMs == r->stampMs
   ok   r && wcslen(r->title) == 255 && std::wstring(r->artist) == L"Artist"
   ok   ev != nullptr
-[387:Trace] Remote command 2
+[521:Trace] Remote command 2
   ok   r->command == kFeedNone
   ok   r && r->source == 0 && r->title[0] == 0
   ok   r && r->source == 0

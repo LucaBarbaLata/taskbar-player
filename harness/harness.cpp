@@ -1,6 +1,8 @@
 // Test harness: runs the mod's UI outside explorer and saves renders as PNG files.
 //   harness.exe render <outDir> <image> [cropX cropY cropSize]
 //   harness.exe live <outDir> <seconds>
+//   harness.exe audio <outDir> <seconds> [style] [all|app]   (real visualizer + CPU use)
+//   harness.exe volume <outDir> [aumid...]                 (reads, never changes, volumes)
 #include "shim.h"
 #include <shellscalingapi.h>
 
@@ -10,9 +12,9 @@
 
 using namespace tp;
 
-static bool SavePng(const Surface& s, const std::wstring& path, uint32_t bg) {
-    int w = s.w, h = s.h;
-    const BYTE* src = (const BYTE*)s.Bits();
+static int g_failures = 0;
+
+static bool SavePixels(const BYTE* src, int w, int h, const std::wstring& path, uint32_t bg) {
     if (!src || w <= 0 || h <= 0) return false;
     std::vector<BYTE> px((size_t)w * h * 4);
     float bgB = (float)(bg & 255), bgG = (float)((bg >> 8) & 255), bgR = (float)((bg >> 16) & 255);
@@ -45,6 +47,107 @@ static bool SavePng(const Surface& s, const std::wstring& path, uint32_t bg) {
     fwprintf(stderr, L"saved %s (%dx%d)\n", path.c_str(), w, h);
     return true;
 }
+
+static bool SavePng(const Surface& s, const std::wstring& path, uint32_t bg) {
+    return SavePixels((const BYTE*)s.Bits(), s.w, s.h, path, bg);
+}
+
+// Premultiplied BGRA pixels.
+struct Image {
+    int w = 0, h = 0;
+    std::vector<BYTE> px;
+};
+
+static Image Grab(const Surface& s) {
+    Image img;
+    img.w = s.w;
+    img.h = s.h;
+    const BYTE* p = (const BYTE*)s.Bits();
+    if (p) img.px.assign(p, p + (size_t)s.w * s.h * 4);
+    return img;
+}
+
+// Draws `src` over `dst` at (ox, oy).
+static void Over(Image& dst, const Surface& src, int ox, int oy) {
+    const BYTE* sp = (const BYTE*)src.Bits();
+    if (!sp) return;
+    for (int y = 0; y < src.h; y++) {
+        for (int x = 0; x < src.w; x++) {
+            int dx = ox + x, dy = oy + y;
+            if (dx < 0 || dy < 0 || dx >= dst.w || dy >= dst.h) continue;
+            const BYTE* s = sp + ((size_t)y * src.w + x) * 4;
+            BYTE* d = dst.px.data() + ((size_t)dy * dst.w + dx) * 4;
+            float a = s[3] / 255.f;
+            for (int c = 0; c < 4; c++) d[c] = (BYTE)std::min(255.f, s[c] + d[c] * (1 - a));
+        }
+    }
+}
+
+// The widget as it appears on the taskbar: its window plus the visualizer window.
+static Image WidgetImage() {
+    Image img = Grab(g_widget->DebugSurface());
+    HWND viz = g_widget->DebugViz().Hwnd();
+    if (viz && g_widget->DebugViz().Shown()) Over(img, g_widget->DebugViz().DebugSurface(), g_widget->DebugVizOffset(), 0);
+    return img;
+}
+
+static bool SaveImage(const Image& img, const std::wstring& path, uint32_t bg) {
+    return SavePixels(img.px.data(), img.w, img.h, path, bg);
+}
+
+// A labelled grid of images saved as one PNG.
+struct Sheet {
+    struct Row {
+        std::wstring label;
+        std::vector<std::pair<std::wstring, Image>> cells;
+    };
+    std::vector<Row> rows;
+
+    void Add(const std::wstring& row, const std::wstring& label, Image img) {
+        if (rows.empty() || rows.back().label != row) rows.push_back(Row{row, {}});
+        rows.back().cells.push_back({label, std::move(img)});
+    }
+
+    void Save(const std::wstring& path, uint32_t bg, float scale) {
+        float pad = 10 * scale, labelH = 18 * scale, rowLabelW = 120 * scale;
+        int maxCols = 0, cellW = 0, cellH = 0;
+        for (auto& r : rows) {
+            maxCols = std::max(maxCols, (int)r.cells.size());
+            for (auto& c : r.cells) {
+                cellW = std::max(cellW, c.second.w);
+                cellH = std::max(cellH, c.second.h);
+            }
+        }
+        int W = (int)(rowLabelW + maxCols * (cellW + pad) + pad);
+        int H = (int)(pad + rows.size() * (cellH + labelH + pad));
+        Surface s;
+        s.Resize(W, H);
+        ID2D1RenderTarget* rt = s.Begin();
+        if (!rt) return;
+        rt->Clear(Rgba(bg));
+        auto* font = g_gfx->Font(false, 11.5f * scale, DWRITE_FONT_WEIGHT_NORMAL);
+        auto* bold = g_gfx->Font(false, 12 * scale, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+        for (size_t ri = 0; ri < rows.size(); ri++) {
+            float y = pad + ri * (cellH + labelH + pad);
+            DrawTextLine(rt, rows[ri].label, bold, RectF(pad, y + labelH, rowLabelW, y + labelH + cellH),
+                         s.Brush(Rgba(0xFFFFFF, 0.9f)));
+            for (size_t ci = 0; ci < rows[ri].cells.size(); ci++) {
+                auto& [label, img] = rows[ri].cells[ci];
+                float x = rowLabelW + ci * (cellW + pad);
+                DrawTextLine(rt, label, font, RectF(x, y, x + cellW, y + labelH), s.Brush(Rgba(0xFFFFFF, 0.6f)));
+                com_ptr<IWICBitmap> wic;
+                if (FAILED(Wic()->CreateBitmapFromMemory(img.w, img.h, GUID_WICPixelFormat32bppPBGRA, img.w * 4,
+                                                         (UINT)img.px.size(), img.px.data(), wic.put())))
+                    continue;
+                com_ptr<ID2D1Bitmap> bmp;
+                if (FAILED(rt->CreateBitmapFromWicBitmap(wic.get(), nullptr, bmp.put()))) continue;
+                rt->DrawBitmap(bmp.get(), RectXYWH(x, y + labelH, (float)img.w, (float)img.h));
+            }
+        }
+        s.End();
+        SavePng(s, path, bg);
+    }
+};
 
 static LRESULT CALLBACK FakeTaskbarProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return DefWindowProcW(h, m, w, l);
@@ -96,6 +199,39 @@ static std::shared_ptr<Art> LoadArt(const std::wstring& path, int cx, int cy, in
     return art;
 }
 
+// A generated cover (purple to orange), so renders show the accent color.
+static std::shared_ptr<Art> SyntheticArt() {
+    const int N = 300;
+    Surface s;
+    s.Resize(N, N);
+    ID2D1RenderTarget* rt = s.Begin();
+    if (!rt) return nullptr;
+    D2D1_GRADIENT_STOP stops[] = {{0.f, Rgba(0x2B1055)}, {0.55f, Rgba(0xC2185B)}, {1.f, Rgba(0xFF8A1E)}};
+    com_ptr<ID2D1GradientStopCollection> coll;
+    rt->CreateGradientStopCollection(stops, 3, coll.put());
+    com_ptr<ID2D1LinearGradientBrush> g;
+    rt->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties({0, 0}, {(float)N, (float)N}), coll.get(),
+                                  g.put());
+    rt->FillRectangle(RectF(0, 0, (float)N, (float)N), g.get());
+    rt->FillEllipse(D2D1::Ellipse({N * 0.62f, N * 0.4f}, N * 0.2f, N * 0.2f), s.Brush(Rgba(0xFFD54F)));
+    s.End();
+    com_ptr<IWICBitmap> bmp;
+    if (FAILED(Wic()->CreateBitmapFromMemory(N, N, GUID_WICPixelFormat32bppPBGRA, N * 4, N * N * 4,
+                                             (BYTE*)s.Bits(), bmp.put())))
+        return nullptr;
+    UINT smallPx, largePx;
+    ArtSizes(smallPx, largePx);
+    auto art = std::make_shared<Art>();
+    art->key = L"synthetic";
+    art->full = ToPbgra(bmp.get());
+    art->small = SquareScaled(art->full.get(), smallPx);
+    art->smallPx = smallPx;
+    art->large = SquareScaled(art->full.get(), largePx);
+    art->largePx = largePx;
+    art->accent = ComputeAccent(art->full.get());
+    return art;
+}
+
 static void DefaultSettings() {
     auto& s = HarnessSettings();
     s[L"redirectPort"] = L"8974";
@@ -108,6 +244,52 @@ static void DefaultSettings() {
     s[L"popupAnimations"] = L"1";
     s[L"hideWhenPausedMinutes"] = L"0";
     s[L"overlayMode"] = L"0";
+    // The defaults from the settings block of the mod.
+    s[L"scrollVolume.enabled"] = L"1";
+    s[L"scrollVolume.target"] = L"app";
+    s[L"scrollVolume.step"] = L"5";
+    s[L"scrollVolume.invert"] = L"0";
+    s[L"scrollVolume.indicator"] = L"1";
+    s[L"visualizer.enabled"] = L"1";
+    s[L"visualizer.style"] = L"bars";
+    s[L"visualizer.position"] = L"afterControls";
+    s[L"visualizer.width"] = L"32";
+    s[L"visualizer.height"] = L"20";
+    s[L"visualizer.bars"] = L"6";
+    s[L"visualizer.gap"] = L"2";
+    s[L"visualizer.roundness"] = L"100";
+    s[L"visualizer.peaks"] = L"0";
+    s[L"visualizer.mirror"] = L"0";
+    s[L"visualizer.colorMode"] = L"accent";
+    s[L"visualizer.color"] = L"FF1ED760";
+    s[L"visualizer.color2"] = L"FFB15CFF";
+    s[L"visualizer.opacity"] = L"100";
+    s[L"visualizer.sensitivity"] = L"100";
+    s[L"visualizer.autoLevel"] = L"1";
+    s[L"visualizer.riseSpeed"] = L"80";
+    s[L"visualizer.fallSpeed"] = L"35";
+    s[L"visualizer.frameRate"] = L"60";
+    s[L"visualizer.minFrequency"] = L"50";
+    s[L"visualizer.maxFrequency"] = L"10000";
+    s[L"visualizer.source"] = L"all";
+    s[L"visualizer.onlyWhenPlaying"] = L"1";
+    s[L"visualizer.whenSilent"] = L"shrink";
+    s[L"visualizer.silenceDelay"] = L"2";
+}
+
+// Deterministic "music" for renders.
+static std::vector<float> FakeLevels(int n) {
+    std::vector<float> v(n);
+    for (int i = 0; i < n; i++) v[i] = 0.22f + 0.7f * std::fabs(std::sin(i * 1.7f + 0.6f));
+    return v;
+}
+static std::vector<float> FakeWave(int n) {
+    std::vector<float> v(n);
+    for (int i = 0; i < n; i++) {
+        float t = (float)i / std::max(1, n - 1);
+        v[i] = 0.62f * std::sin(6.2832f * 2 * t) + 0.25f * std::sin(6.2832f * 5 * t + 1.f);
+    }
+    return v;
 }
 
 static std::shared_ptr<Snapshot> SpotifySnap(std::shared_ptr<Art> art) {
@@ -167,7 +349,7 @@ static void RenderMode(const std::wstring& out, const std::wstring& image, int c
         fwprintf(stderr, L"UI init failed\n");
         return;
     }
-    auto art = LoadArt(image, cx, cy, cs);
+    auto art = image.empty() ? SyntheticArt() : LoadArt(image, cx, cy, cs);
     fwprintf(stderr, L"art=%p accent=%.2f,%.2f,%.2f scale=%.2f\n", art.get(), art ? art->accent.r : 0,
              art ? art->accent.g : 0, art ? art->accent.b : 0, g_widget->Scale());
     const uint32_t taskbarBg = 0x1B1B1F, desktopBg = 0x2E3440;
@@ -253,8 +435,435 @@ static void RenderMode(const std::wstring& out, const std::wstring& image, int c
     show(connect);
     SavePng(g_widget->DebugSurface(), out + L"\\widget_connect.png", taskbarBg);
 
+    // ---- Scroll volume (Spotify: changes the shown volume right away) ----
+    {
+        auto s = SpotifySnap(art);
+        show(s);
+        g_widget->DebugVolume(-1, false, L"", 0.f);
+        int v0 = g_ui.Eff()->volume;
+        g_widget->DebugWheel(120, 0);
+        int v1 = g_ui.Eff()->volume;
+        auto fill1 = g_widget->DebugVolumeFill();  // the bar slides from the old level
+        for (int i = 0; i < 3; i++) g_widget->DebugWheel(-40, 0);  // touchpad: three small steps
+        int v2 = g_ui.Eff()->volume;
+        g_widget->DebugWheel(120, MK_SHIFT);
+        int v3 = g_ui.Eff()->volume;
+        auto fill3 = g_widget->DebugVolumeFill();
+        bool ok = v0 == 64 && v1 == 69 && v2 == 64 && v3 == 65;
+        fwprintf(stderr, L"%s scroll test: %d -> %d (notch up) -> %d (touchpad down) -> %d (Shift)\n",
+                 ok ? L"ok  " : L"FAIL", v0, v1, v2, v3);
+        bool slide = fill1.first == 64.f && fill1.second == 69.f && fill3.second == 65.f;
+        fwprintf(stderr, L"%s volume bar slides: %.0f -> %.0f on the first notch, last target %.0f\n",
+                 slide ? L"ok  " : L"FAIL", fill1.first, fill1.second, fill3.second);
+        g_widget->DebugVolume(-1, false, L"", 0.f);
+    }
+
+    // ---- Visualizer: every style and color mode, positions, sizes ----
+    {
+        Sheet sheet;
+        auto set = [&](std::initializer_list<std::pair<const wchar_t*, const wchar_t*>> kv) {
+            for (auto& [k, v] : kv) HarnessSettings()[k] = v;
+            LoadSettings();
+            g_widget->OnSettingsChanged();
+        };
+        auto reset = [&] {
+            DefaultSettings();
+            LoadSettings();
+            g_widget->OnSettingsChanged();
+        };
+        auto frame = [&](float slot = 1.f, float peakBoost = 0.14f) {
+            int bars = GetSettings()->viz.bars;
+            g_widget->DebugViz().DebugSet(FakeLevels(bars), FakeWave(64), peakBoost, slot);
+            g_widget->DebugVolume(-1, false, L"", false);
+            g_widget->DebugRender(-1);
+            return WidgetImage();
+        };
+        auto s = SpotifySnap(art);  // plays on "Living Room": no real audio is captured
+        show(s);
+        const wchar_t* styles[][2] = {{L"bars", L"Bars"}, {L"mirrored", L"Mirrored bars"}, {L"line", L"Smooth line"},
+                                      {L"dots", L"Dots (LED)"}, {L"wave", L"Wave"}};
+        const wchar_t* colors[][2] = {{L"accent", L"album accent"}, {L"text", L"text color"},
+                                      {L"custom", L"custom"}, {L"gradient", L"gradient"}, {L"rainbow", L"rainbow"}};
+        for (auto& st : styles) {
+            for (auto& co : colors) {
+                reset();
+                set({{L"visualizer.style", st[0]}, {L"visualizer.colorMode", co[0]}});
+                sheet.Add(st[1], co[1], frame());
+            }
+        }
+        reset();
+        sheet.Add(L"Position", L"right of buttons (default)", frame());
+        set({{L"visualizer.position", L"beforeControls"}});
+        sheet.Add(L"Position", L"left of buttons", frame());
+        set({{L"visualizer.position", L"beforeCover"}});
+        sheet.Add(L"Position", L"left of cover", frame());
+        reset();
+        set({{L"showTaskbarControls", L"0"}});
+        sheet.Add(L"Position", L"no buttons", frame());
+
+        reset();
+        set({{L"visualizer.peaks", L"1"}});
+        sheet.Add(L"Options", L"peak markers", frame(1.f, 0.22f));
+        set({{L"visualizer.peaks", L"1"}, {L"visualizer.style", L"dots"}});
+        sheet.Add(L"Options", L"dots + peaks", frame(1.f, 0.3f));
+        reset();
+        set({{L"visualizer.bars", L"16"}, {L"visualizer.width", L"60"}, {L"visualizer.gap", L"1"}, {L"visualizer.height", L"28"}});
+        sheet.Add(L"Options", L"16 bars, 60x28", frame());
+        reset();
+        set({{L"visualizer.roundness", L"0"}, {L"visualizer.colorMode", L"gradient"}, {L"visualizer.style", L"mirrored"}});
+        sheet.Add(L"Options", L"square, gradient", frame());
+        reset();
+        set({{L"visualizer.opacity", L"55"}, {L"visualizer.mirror", L"1"}});
+        sheet.Add(L"Options", L"55% opacity, bass right", frame());
+
+        reset();
+        sheet.Add(L"Silence", L"full", frame(1.f));
+        sheet.Add(L"Silence", L"shrinking (half)", frame(0.5f));
+        sheet.Add(L"Silence", L"hidden", frame(0.f));
+        set({{L"visualizer.whenSilent", L"rest"}});
+        g_widget->DebugViz().DebugSet(std::vector<float>(6, 0.f), std::vector<float>(64, 0.f), 0.f, 1.f);
+        g_widget->DebugRender(-1);
+        sheet.Add(L"Silence", L"flat bars (rest)", WidgetImage());
+
+        reset();
+        auto volume = [&](int level, bool muted, const wchar_t* msg) {
+            int bars = GetSettings()->viz.bars;
+            g_widget->DebugViz().DebugSet(FakeLevels(bars), FakeWave(64), 0.14f, 1.f);
+            g_widget->DebugVolume(level, muted, msg, true);
+            g_widget->DebugRender(-1);
+            Image img = WidgetImage();
+            g_widget->DebugVolume(-1, false, L"", false);
+            return img;
+        };
+        sheet.Add(L"Scroll volume", L"64%", volume(64, false, L""));
+        sheet.Add(L"Scroll volume", L"muted", volume(30, true, L""));
+        sheet.Add(L"Scroll volume", L"100%", volume(100, false, L""));
+        sheet.Add(L"Scroll volume", L"not possible", volume(-1, false, L"Volume locked"));
+        // Frames of the animation: rolling in, the bar sliding 40 -> 64 with
+        // the bump fading, then settled.
+        auto frameOf = [&](float shown, float fill, float bump) {
+            int bars = GetSettings()->viz.bars;
+            g_widget->DebugViz().DebugSet(FakeLevels(bars), FakeWave(64), 0.14f, 1.f);
+            g_widget->DebugVolume(64, false, L"", shown, fill, bump);
+            g_widget->DebugRender(-1);
+            Image img = WidgetImage();
+            g_widget->DebugVolume(-1, false, L"", 0.f);
+            return img;
+        };
+        sheet.Add(L"Volume animation", L"rolling in 35%", frameOf(0.35f, 40, 1.f));
+        sheet.Add(L"Volume animation", L"rolling in 75%", frameOf(0.75f, 48, 0.8f));
+        sheet.Add(L"Volume animation", L"sliding, bump", frameOf(1.f, 57, 0.45f));
+        sheet.Add(L"Volume animation", L"settled", frameOf(1.f, 64, 0.f));
+        sheet.Add(L"Volume animation", L"rolling out 50%", frameOf(0.5f, 64, 0.f));
+        sheet.Save(out + L"\\visualizer_sheet.png", taskbarBg, g_widget->Scale());
+
+        // The same at 150% scaling (a 72 px taskbar).
+        Sheet big;
+        g_testScale = 1.5f;
+        RECT tr{};
+        GetWindowRect(tb, &tr);
+        SetWindowPos(tb, nullptr, 0, 0, tr.right - tr.left, 72, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        g_widget->OnSettingsChanged();
+        for (auto& st : styles) {
+            reset();
+            set({{L"visualizer.style", st[0]}});
+            big.Add(L"150%", st[1], frame());
+        }
+        big.Add(L"150% volume", L"64%", volume(64, false, L""));
+        big.Save(out + L"\\visualizer_sheet_150.png", taskbarBg, 1.5f);
+        g_testScale = 0;
+        SetWindowPos(tb, nullptr, 0, 0, tr.right - tr.left, tr.bottom - tr.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        reset();
+
+        // A short title with Luca's settings (a wide mirrored visualizer).
+        Sheet shortSheet;
+        set({{L"visualizer.style", L"mirrored"}, {L"visualizer.width", L"100"}, {L"visualizer.bars", L"20"},
+             {L"visualizer.peaks", L"1"}, {L"visualizer.sensitivity", L"80"}, {L"scrollVolume.step", L"1"}});
+        auto shortSnap = SpotifySnap(art);
+        shortSnap->title = L"My Sacrifice";
+        shortSnap->artist = L"Creed";
+        shortSnap->trackKey = L"short";
+        show(shortSnap);
+        auto vframe = [&](int level, float fill, float bump, bool muted = false) {
+            int bars = GetSettings()->viz.bars;
+            g_widget->DebugViz().DebugSet(FakeLevels(bars), FakeWave(64), 0.14f, 1.f);
+            g_widget->DebugVolume(level, muted, L"", 1.f, fill, bump);
+            g_widget->DebugRender(-1);
+            Image img = WidgetImage();
+            g_widget->DebugVolume(-1, false, L"", 0.f);
+            return img;
+        };
+        shortSheet.Add(L"My Sacrifice", L"9%, resting", vframe(9, 9, 0.f));
+        shortSheet.Add(L"My Sacrifice", L"9%, just scrolled", vframe(9, 8.6f, 1.f));
+        shortSheet.Add(L"My Sacrifice", L"64%, half settled", vframe(64, 64, 0.5f));
+        shortSheet.Add(L"My Sacrifice", L"100%", vframe(100, 100, 0.f));
+        shortSheet.Add(L"My Sacrifice", L"muted", vframe(30, 30, 0.f, true));
+        shortSheet.Save(out + L"\\volume_short_title.png", taskbarBg, g_widget->Scale());
+        reset();
+    }
+
     UiShutdown();
+    g_tap.Shutdown();
     DestroyWindow(tb);
+}
+
+// The real visualizer with the sound playing on this PC; prints levels and CPU use.
+static void AudioMode(const std::wstring& out, int seconds, const std::wstring& style, const std::wstring& source) {
+    if (!style.empty()) HarnessSettings()[L"visualizer.style"] = style;
+    if (!source.empty()) HarnessSettings()[L"visualizer.source"] = source;
+    LoadSettings();
+    InitTrace();
+    HWND tb = CreateFakeTaskbar();
+    g_taskbarHwnd = tb;
+    UiInit(tb);
+    if (!g_widget) return;
+    auto s = SpotifySnap(SyntheticArt());
+    s->deviceName = ThisComputerName();  // "playing on this PC"
+    g_ui.SetSnapshot(s);
+    g_widget->OnSnapshot();
+    FILETIME c0, e0, k0, u0, c1, e1, k1, u1;
+    GetProcessTimes(GetCurrentProcess(), &c0, &e0, &k0, &u0);
+    ULONGLONG t0 = Tick();
+    int framesSeen = 0;
+    uint64_t lastSeq = 0;
+    for (int sec = 0; sec < seconds; sec++) {
+        Pump(1000);
+        TapFrame f;
+        g_tap.Read(f);
+        int delta = (int)(f.seq - lastSeq);
+        framesSeen += delta;
+        lastSeq = f.seq;
+        std::wstring bars;
+        for (float b : f.bands) bars += std::to_wstring(std::clamp((int)std::lround(b * 9), 0, 9));
+        long long age = f.lastSound ? (long long)(Tick() - f.lastSound) : -1;
+        fwprintf(stderr, L"  %2ds capturing=%d last sound %5lld ms ago  levels 0-9 [%s]  frames/s=%d\n", sec + 1,
+                 f.capturing, age, bars.c_str(), delta);
+    }
+    GetProcessTimes(GetCurrentProcess(), &c1, &e1, &k1, &u1);
+    auto ft = [](FILETIME f) { return ((ULONGLONG)f.dwHighDateTime << 32) | f.dwLowDateTime; };
+    double cpuMs = (ft(k1) - ft(k0) + ft(u1) - ft(u0)) / 10000.0;
+    double wallMs = (double)(Tick() - t0);
+    fwprintf(stderr, L"CPU: %.0f ms over %.0f ms = %.2f%% of one core (%d analysis frames)\n", cpuMs, wallMs,
+             100.0 * cpuMs / wallMs, framesSeen);
+    g_widget->DebugRender(-1);
+    SaveImage(WidgetImage(), out + L"\\live_visualizer.png", 0x1B1B1F);
+    UiShutdown();
+    g_tap.Shutdown();
+    DestroyWindow(tb);
+}
+
+// Restores the master mute state when it goes out of scope.
+struct MasterMuteGuard {
+    com_ptr<IAudioEndpointVolume> vol;
+    BOOL was = FALSE;
+    bool active = false;
+    bool Mute() {
+        auto dev = DefaultRenderDevice();
+        if (!dev || FAILED(dev->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr, vol.put_void())))
+            return false;
+        vol->GetMute(&was);
+        active = SUCCEEDED(vol->SetMute(TRUE, nullptr));
+        return active;
+    }
+    ~MasterMuteGuard() {
+        if (active) vol->SetMute(was, nullptr);
+    }
+};
+
+// Loudness of what the PC plays right now (dBFS), measured for `ms`.
+static float SystemLoudnessDb(int ms) {
+    CaptureStream cs;
+    std::wstring id;
+    if (!cs.OpenSystem(id)) return -200;
+    std::vector<float> mono;
+    ULONGLONG end = Tick() + ms;
+    while (Tick() < end) {
+        cs.Read(mono);
+        Sleep(20);
+    }
+    double sum = 0;
+    for (float v : mono) sum += (double)v * v;
+    return mono.empty() ? -200.f : 10.f * std::log10((float)(sum / mono.size()) + 1e-12f);
+}
+
+// Plays a tone from this process while the master output is muted (nothing
+// is heard; Windows captures before the master volume) and checks what the
+// visualizer sees, with "only the app shown" and with "everything".
+static void ToneTest(const std::wstring& out) {
+    float before = SystemLoudnessDb(600);
+    if (before > -70) {
+        fwprintf(stderr, L"something is playing (%.1f dB): not muting the PC, test skipped\n", before);
+        return;
+    }
+    MasterMuteGuard mute;
+    if (!mute.Mute()) {
+        fwprintf(stderr, L"could not mute the output, test skipped\n");
+        return;
+    }
+    fwprintf(stderr, L"master output muted for the test (was muted: %d)\n", mute.was);
+    std::atomic<float> hz{1000.f};
+    std::atomic<bool> stop{false}, started{false};
+    std::thread render([&] {
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        auto dev = DefaultRenderDevice();
+        com_ptr<IAudioClient> client;
+        WAVEFORMATEX* fmt = nullptr;
+        if (!dev || FAILED(dev->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, client.put_void())) ||
+            FAILED(client->GetMixFormat(&fmt)) ||
+            FAILED(client->Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 2000000, 0, fmt, nullptr))) {
+            fwprintf(stderr, L"tone: render setup failed\n");
+            CoUninitialize();
+            return;
+        }
+        com_ptr<ISimpleAudioVolume> vol;
+        client->GetService(__uuidof(ISimpleAudioVolume), vol.put_void());
+        // Windows remembers per-app volume, so set it explicitly.
+        if (!vol || FAILED(vol->SetMute(FALSE, nullptr)) || FAILED(vol->SetMasterVolume(1.f, nullptr))) {
+            fwprintf(stderr, L"tone: could not set the app volume, not playing\n");
+            CoUninitialize();
+            return;
+        }
+        com_ptr<IAudioRenderClient> rc;
+        client->GetService(__uuidof(IAudioRenderClient), rc.put_void());
+        UINT32 bufFrames = 0;
+        client->GetBufferSize(&bufFrames);
+        bool isFloat = fmt->wFormatTag == WAVE_FORMAT_IEEE_FLOAT ||
+                       (fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE && ((WAVEFORMATEXTENSIBLE*)fmt)->SubFormat.Data1 == 3);
+        int ch = fmt->nChannels, rate = fmt->nSamplesPerSec;
+        fwprintf(stderr, L"tone: -9 dB sine, %d Hz, %d ch, float=%d\n", rate, ch, isFloat);
+        client->Start();
+        started = true;
+        double phase = 0;
+        while (!stop) {
+            UINT32 pad = 0;
+            client->GetCurrentPadding(&pad);
+            UINT32 n = bufFrames - pad;
+            BYTE* d = nullptr;
+            if (n && SUCCEEDED(rc->GetBuffer(n, &d))) {
+                for (UINT32 f = 0; f < n; f++) {
+                    float v = 0.5f * (float)std::sin(phase);
+                    phase += 6.283185307 * hz / rate;
+                    for (int c = 0; c < ch; c++) {
+                        if (isFloat) ((float*)d)[f * ch + c] = v;
+                        else ((int16_t*)d)[f * ch + c] = (int16_t)(v * 32767);
+                    }
+                }
+                rc->ReleaseBuffer(n, 0);
+            }
+            Sleep(10);
+        }
+        client->Stop();
+        CoTaskMemFree(fmt);
+        CoUninitialize();
+    });
+    for (int i = 0; i < 100 && !started; i++) Sleep(20);
+
+    HarnessSettings()[L"visualizer.source"] = L"app";
+    LoadSettings();
+    InitTrace();
+    HWND tb = CreateFakeTaskbar();
+    g_taskbarHwnd = tb;
+    UiInit(tb);
+    auto s = std::make_shared<Snapshot>();
+    s->visible = true;
+    s->src = Src::Session;
+    s->aumid = L"harness.exe";
+    s->appName = L"Harness";
+    s->title = L"Test tone";
+    s->artist = L"1 kHz, then 100 Hz";
+    s->trackKey = L"tone";
+    s->playing = true;
+    s->canPlayPause = true;
+    g_ui.SetSnapshot(s);
+    g_widget->OnSnapshot();
+    auto measure = [&](const wchar_t* what, int wantBand) {
+        Pump(1500);
+        TapFrame f;
+        g_tap.Read(f);
+        std::wstring bars;
+        for (float b : f.bands) bars += std::to_wstring(std::clamp((int)std::lround(b * 9), 0, 9));
+        int loudest = f.bands.empty() ? -1
+                                      : (int)(std::max_element(f.bands.begin(), f.bands.end()) - f.bands.begin());
+        bool sound = f.lastSound && Tick() - f.lastSound < 300;
+        bool ok = f.capturing && sound && loudest == wantBand;
+        fwprintf(stderr, L"  %s %s: capturing=%d sound=%d levels [%s] loudest band %d (captured %.1f dB, %llu samples)\n",
+                 ok ? L"ok  " : L"FAIL", what, f.capturing, sound, bars.c_str(), loudest, f.rmsDb,
+                 (unsigned long long)g_tap.samplesRead.load());
+        if (!ok) g_failures++;
+    };
+    fwprintf(stderr, L"[only the app shown (process loopback)]\n");
+    uint64_t s0 = g_tap.samplesRead;
+    ULONGLONG t0 = Tick();
+    measure(L"1 kHz", 3);
+    double rateSeen = (g_tap.samplesRead - s0) * 1000.0 / (Tick() - t0);
+    fwprintf(stderr, L"  %s audio arrives at %.0f samples/s (48000 expected, minus start-up)\n",
+             rateSeen > 30000 ? L"ok  " : L"FAIL", rateSeen);
+    if (rateSeen <= 30000) g_failures++;
+    hz = 100.f;
+    measure(L"100 Hz", 0);
+    hz = 6000.f;
+    measure(L"6 kHz", 5);
+    g_widget->DebugRender(-1);
+    SaveImage(WidgetImage(), out + L"\\tone_visualizer.png", 0x1B1B1F);
+
+    fwprintf(stderr, L"[everything on this PC (loopback)]\n");
+    HarnessSettings()[L"visualizer.source"] = L"all";
+    LoadSettings();
+    g_widget->OnSettingsChanged();
+    hz = 1000.f;
+    measure(L"1 kHz", 3);
+    {
+        // CPU while animating at 60 fps (includes generating the tone).
+        FILETIME c0, e0, k0, u0, c1, e1, k1, u1;
+        GetProcessTimes(GetCurrentProcess(), &c0, &e0, &k0, &u0);
+        uint64_t seq0;
+        {
+            TapFrame f;
+            g_tap.Read(f);
+            seq0 = f.seq;
+        }
+        ULONGLONG t0 = Tick();
+        g_dbgAnalysisUs = g_dbgDrawUs = g_dbgPresentUs = 0;
+        for (int i = 0; i < 6; i++) {
+            hz = i % 2 ? 300.f : 2500.f;  // keep the bars moving
+            Pump(500);
+        }
+        fwprintf(stderr, L"  per second: analysis %.1f ms, drawing %.1f ms, presenting %.1f ms\n",
+                 g_dbgAnalysisUs / 3000.0, g_dbgDrawUs / 3000.0, g_dbgPresentUs / 3000.0);
+        GetProcessTimes(GetCurrentProcess(), &c1, &e1, &k1, &u1);
+        TapFrame f;
+        g_tap.Read(f);
+        auto ft = [](FILETIME x) { return ((ULONGLONG)x.dwHighDateTime << 32) | x.dwLowDateTime; };
+        double cpuMs = (ft(k1) - ft(k0) + ft(u1) - ft(u0)) / 10000.0, wall = (double)(Tick() - t0);
+        fwprintf(stderr, L"  CPU while animating: %.2f%% of one core, %.0f frames/s\n", 100 * cpuMs / wall,
+                 (f.seq - seq0) * 1000.0 / wall);
+    }
+    stop = true;
+    render.join();
+    Pump(2500);
+    TapFrame f;
+    g_tap.Read(f);
+    bool quiet = !f.lastSound || Tick() - f.lastSound > 1500;
+    fwprintf(stderr, L"  %s tone stopped: no sound for %lld ms\n", quiet ? L"ok  " : L"FAIL",
+             f.lastSound ? (long long)(Tick() - f.lastSound) : -1LL);
+    if (!quiet) g_failures++;
+    UiShutdown();
+    g_tap.Shutdown();
+    DestroyWindow(tb);
+    fwprintf(stderr, g_failures ? L"\n%d FAILURE(S)\n" : L"\nall tests passed\n", g_failures);
+}
+
+// Reads (does not change) the volume of the system and of some apps.
+static void VolumeMode(const std::vector<std::wstring>& apps) {
+    auto sys = NudgeSystemVolume(0);
+    fwprintf(stderr, L"system: ok=%d level=%d muted=%d\n", sys.ok, sys.level, sys.muted);
+    for (auto& a : apps) {
+        auto id = ResolveAppAudio(a);
+        std::wstring names;
+        auto r = NudgeAppVolume(id, 0, &names);
+        fwprintf(stderr, L"%-40s exe='%s' package='%s' root=%u -> ok=%d level=%d muted=%d sessions: %s\n", a.c_str(),
+                 id.exe.c_str(), id.package.c_str(), id.rootPid, r.ok, r.level, r.muted, names.c_str());
+    }
 }
 
 static void LiveMode(const std::wstring& out, int seconds) {
@@ -285,7 +894,6 @@ static void LiveMode(const std::wstring& out, int seconds) {
     fwprintf(stderr, L"clean shutdown\n");
 }
 
-static int g_failures = 0;
 #define CHECK(cond)                                                       \
     do {                                                                  \
         if (cond) fwprintf(stderr, L"  ok   %S\n", #cond);                \
@@ -567,6 +1175,136 @@ static void SelfTest() {
         CHECK(waited >= 350 && waited < 1000);
         CHECK(Tick() >= g_retryUntil[(int)ApiFamily::Player]);
         g_retryUntil[(int)ApiFamily::Player] = 0;
+    }
+    fwprintf(stderr, L"[spectrum]\n");
+    {
+        const int N = 2048;
+        const float rate = 48000;
+        Spectrum fft;
+        fft.Prepare(N);
+        BandLayout L;
+        BuildBands(L, 6, 50, 10000, rate, N);
+        // The bin weights cover each band exactly.
+        bool covered = true;
+        float ratio = std::pow(10000.f / 50.f, 1.f / 6);
+        for (int b = 0; b < 6; b++) {
+            float lo = 50 * std::pow(ratio, (float)b), sum = 0;
+            for (auto& t : L.bands[b]) sum += t.weight * rate / N;
+            if (std::fabs(sum - lo * (ratio - 1)) > 1.f) covered = false;
+        }
+        CHECK(covered);
+        auto tone = [&](float hz, float amp) {
+            std::vector<float> s(N), p, db(6);
+            for (int i = 0; i < N; i++) s[i] = amp * std::sin(6.2831853f * hz * i / rate);
+            fft.Power(s.data(), p);
+            BandsDb(p, L, db.data());
+            return db;
+        };
+        auto loudest = [](const std::vector<float>& db) { return (int)(std::max_element(db.begin(), db.end()) - db.begin()); };
+        auto t1k = tone(1000, 1.f);
+        fwprintf(stderr, L"  1 kHz full scale: %.1f %.1f %.1f %.1f %.1f %.1f dB\n", t1k[0], t1k[1], t1k[2], t1k[3],
+                 t1k[4], t1k[5]);
+        CHECK(loudest(t1k) == 3);                    // 710-1718 Hz
+        CHECK(t1k[3] > -1.f && t1k[3] < 4.f);        // ~0 dB
+        CHECK(t1k[0] < -40 && t1k[5] < -40);         // far bands stay quiet
+        auto t100 = tone(100, 0.1f);
+        CHECK(loudest(t100) == 0);                   // 50-121 Hz
+        auto t6k = tone(6000, 0.1f);
+        CHECK(loudest(t6k) == 5);                    // 4.2-10 kHz
+        auto silent = tone(1000, 0.f);
+        CHECK(silent[3] < -100);
+
+        LevelMapper fixed;
+        float lv[6];
+        fixed.Map(t1k.data(), 6, 0.016f, false, 0.f, lv);
+        CHECK(lv[3] == 1.f && lv[0] == 0.f);
+        fixed.Map(silent.data(), 6, 0.016f, false, 0.f, lv);
+        CHECK(lv[3] == 0.f);
+        // Auto level: a quiet tone (-30 dB) soon reaches full height...
+        LevelMapper autoL;
+        auto quiet = tone(1000, 0.03f);
+        for (int i = 0; i < 60; i++) autoL.Map(quiet.data(), 6, 0.016f, true, 0.f, lv);
+        CHECK(lv[3] > 0.95f && lv[0] < 0.05f);
+        // ...but silence isn't blown up to full height.
+        for (int i = 0; i < 600; i++) autoL.Map(silent.data(), 6, 0.016f, true, 0.f, lv);
+        CHECK(lv[3] == 0.f);
+        // Sensitivity raises the bars.
+        LevelMapper a2, a3;
+        auto mid = tone(1000, 0.003f);
+        float l1[6], l2[6];
+        a2.Map(mid.data(), 6, 0.016f, false, 0.f, l1);
+        a3.Map(mid.data(), 6, 0.016f, false, 20.f * std::log10(2.f), l2);
+        CHECK(l2[3] > l1[3]);
+        // 48 narrow bands: none is empty.
+        BandLayout L48;
+        BuildBands(L48, 48, 50, 10000, rate, N);
+        bool none = true;
+        for (auto& b : L48.bands) none &= !b.empty();
+        CHECK(L48.count == 48 && none);
+        // Other sample rates.
+        BandLayout L44;
+        BuildBands(L44, 6, 50, 22000, 44100, N);
+        CHECK(L44.count == 6 && !L44.bands[5].empty());
+    }
+    fwprintf(stderr, L"[scroll steps]\n");
+    {
+        float acc = 0;
+        CHECK(WheelSteps(acc, 120, 5) == 5);         // one notch
+        CHECK(WheelSteps(acc, -120, 5) == -5);
+        acc = 0;
+        int total = 0;
+        for (int i = 0; i < 3; i++) total += WheelSteps(acc, 40, 5);
+        CHECK(total == 5);                           // touchpad: three thirds of a notch
+        acc = 0;
+        total = 0;
+        for (int i = 0; i < 11; i++) total += WheelSteps(acc, 10, 1);
+        CHECK(total == 0);                           // not a full notch yet at 1%
+        total += WheelSteps(acc, 10, 1);
+        CHECK(total == 1);
+        acc = 0;
+        CHECK(WheelSteps(acc, 60, 5) == 2);          // 2.5% -> 2, half a step is kept
+        CHECK(WheelSteps(acc, 12, 5) == 1);
+        CHECK(WheelSteps(acc, -60, 5) == -2);        // turning around drops the remainder
+    }
+    fwprintf(stderr, L"[app audio ids]\n");
+    {
+        CHECK(ResolveAppAudio(L"Spotify.exe").exe == L"spotify.exe");
+        CHECK(ResolveAppAudio(L"SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify").exe == L"spotify.exe");
+        auto store = ResolveAppAudio(L"AppleInc.AppleMusicWin_nzyj5cx40ttey!App");
+        CHECK(store.package == L"AppleInc.AppleMusicWin_nzyj5cx40ttey" && store.exe.empty());
+        CHECK(ResolveAppAudio(L"C:\\Program Files\\VideoLAN\\VLC\\vlc.exe").exe == L"vlc.exe");
+        auto guess = ResolveAppAudio(L"NoSuchPlayerXyz");
+        CHECK(guess.exe == L"nosuchplayerxyz.exe" && guess.rootPid == 0);
+        auto self = ResolveAppAudio(L"harness.exe");
+        CHECK(self.rootPid == GetCurrentProcessId());
+    }
+    fwprintf(stderr, L"[new settings]\n");
+    {
+        LoadSettings();
+        auto s = GetSettings();
+        CHECK(s->scroll.enabled && !s->scroll.system && s->scroll.step == 5 && s->scroll.indicator);
+        CHECK(s->viz.enabled && s->viz.style == Settings::Viz::Style::Bars && s->viz.width == 32 && s->viz.bars == 6);
+        CHECK(s->viz.colorMode == Settings::Viz::Color::Accent && s->viz.color == 0xFF1ED760);
+        CHECK(s->viz.whenSilent == Settings::Viz::Silent::Shrink && s->viz.silenceDelayMs == 2000);
+        auto& h = HarnessSettings();
+        h[L"scrollVolume.target"] = L"system";
+        h[L"scrollVolume.step"] = L"90";
+        h[L"visualizer.style"] = L"wave";
+        h[L"visualizer.colorMode"] = L"rainbow";
+        h[L"visualizer.color"] = L"#336699";
+        h[L"visualizer.source"] = L"app";
+        h[L"visualizer.whenSilent"] = L"rest";
+        h[L"visualizer.bars"] = L"500";
+        h[L"visualizer.minFrequency"] = L"5000";
+        h[L"visualizer.maxFrequency"] = L"6000";
+        LoadSettings();
+        s = GetSettings();
+        CHECK(s->scroll.system && s->scroll.step == 25);
+        CHECK(s->viz.style == Settings::Viz::Style::Wave && s->viz.colorMode == Settings::Viz::Color::Rainbow);
+        CHECK(s->viz.color == 0xFF336699 && s->viz.appOnly && s->viz.whenSilent == Settings::Viz::Silent::Rest);
+        CHECK(s->viz.bars == 48 && s->viz.maxHz >= s->viz.minHz * 2);
+        DefaultSettings();
+        LoadSettings();
     }
     fwprintf(stderr, L"[network]\n");
     Http::Init();
@@ -875,6 +1613,15 @@ int wmain(int argc, wchar_t** argv) {
         LiveMode(out, argc > 3 ? _wtoi(argv[3]) : 6);
     } else if (mode == L"selftest") {
         SelfTest();
+    } else if (mode == L"audio") {
+        AudioMode(out, argc > 3 ? _wtoi(argv[3]) : 8, argc > 4 ? argv[4] : L"", argc > 5 ? argv[5] : L"");
+    } else if (mode == L"tonetest") {
+        ToneTest(out);
+    } else if (mode == L"volume") {
+        std::vector<std::wstring> apps;
+        for (int i = 3; i < argc; i++) apps.push_back(argv[i]);
+        if (apps.empty()) apps = {L"Spotify.exe", L"Brave", L"Chrome", L"MSEdge"};
+        VolumeMode(apps);
     } else if (mode == L"churn") {
         ChurnTest();
     } else if (mode == L"blips") {

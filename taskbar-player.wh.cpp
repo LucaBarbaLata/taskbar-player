@@ -2,8 +2,8 @@
 // @id              taskbar-player
 // @name            Taskbar Player
 // @description     A compact now-playing widget on the left side of the taskbar with a popup player and Spotify Connect support
-// @version         1.1.0
-// @author          Luca
+// @version         1.2.0
+// @author          lucariki
 // @include         explorer.exe
 // @architecture    x86-64
 // @compilerOptions -lole32 -loleaut32 -luuid -lwindowsapp -lwinhttp -lws2_32 -lcrypt32 -lbcrypt -ld2d1 -ldwrite -lwindowscodecs -lgdi32 -luser32 -lshell32 -lshlwapi -lcomctl32 -lversion -luxtheme -ld3d11 -ldxgi -ldcomp -ldwmapi -lcoremessaging
@@ -27,6 +27,16 @@ A small now-playing widget that lives on the left side of the taskbar.
   any of your devices (phone, speaker, TV, ...). Spotify always has priority.
 * Shares what it shows with the Glyph Lock Screen mod, which can then display
   and control Spotify Connect playback on the lock screen.
+* **Scroll to change the volume**: scroll the mouse wheel over the widget.
+  For Spotify it changes Spotify's own volume (also on your phone or a
+  speaker); for other apps it changes their slider in the Windows Volume
+  Mixer. Hold Shift for 1% steps. Can also change the Windows master volume
+  instead.
+* **Audio visualizer** next to the playback buttons while sound plays on this
+  PC: bars, mirrored bars, a smooth line, LED dots or a wave, with many
+  options (size, colors, speed, sensitivity, ...) in the settings. It only
+  listens to what the PC plays (like screen recorders do); nothing is
+  recorded or saved.
 
 The widget hides itself when nothing is playing.
 
@@ -57,6 +67,11 @@ Notes:
   often as needed and backs off while it's blocked.
 * If the widget doesn't appear on the taskbar, turn on **Compatibility mode**
   in the settings.
+* Scrolling over the widget needs the Windows setting "Scroll inactive
+  windows when I hover over them" (on by default).
+* The visualizer's "Only the app shown on the widget" source needs Windows 11
+  (or Windows 10 21H2+). With "Everything playing on this PC" it also reacts
+  to other sounds, unless "Only while the shown track plays on this PC" is on.
 */
 // ==/WindhawkModReadme==
 
@@ -117,6 +132,115 @@ Notes:
   $description: >-
     Draw the widget as a separate window on top of the taskbar instead of
     embedding it. Try this if the widget doesn't show up.
+- scrollVolume:
+  - enabled: true
+    $name: Scroll on the widget to change the volume
+  - target: app
+    $name: What scrolling changes
+    $options:
+    - app: The playing app (Spotify's volume, or the app's Volume Mixer slider)
+    - system: Windows master volume
+  - step: 5
+    $name: Step per scroll notch (%)
+    $description: Hold Shift while scrolling for 1% steps.
+  - invert: false
+    $name: Reverse scroll direction
+  - indicator: true
+    $name: Show the volume on the widget while scrolling
+  $name: Scroll volume
+- visualizer:
+  - enabled: true
+    $name: Show an audio visualizer
+    $description: >-
+      Moves with the sound playing on this PC. It only listens to what the PC
+      plays; nothing is recorded or saved.
+  - style: bars
+    $name: Style
+    $options:
+    - bars: Bars
+    - mirrored: Mirrored bars
+    - line: Smooth line
+    - dots: Dots (LED meter)
+    - wave: Wave (oscilloscope)
+  - position: afterControls
+    $name: Position
+    $options:
+    - afterControls: Right of the playback buttons
+    - beforeControls: Left of the playback buttons
+    - beforeCover: Left of the cover
+  - width: 32
+    $name: Width
+    $description: In pixels at 100% scaling (8-200).
+  - height: 20
+    $name: Height
+    $description: In pixels at 100% scaling (4-48, at most the taskbar height).
+  - bars: 6
+    $name: Number of bars
+    $description: Also the number of points of the smooth line (2-48).
+  - gap: 2
+    $name: Gap between bars
+    $description: In pixels at 100% scaling.
+  - roundness: 100
+    $name: Roundness (%)
+    $description: 0 gives square bars and dots, 100 fully rounded ones.
+  - peaks: false
+    $name: Falling peak markers
+  - mirror: false
+    $name: Bass on the right
+  - colorMode: accent
+    $name: Color
+    $options:
+    - accent: From the album cover
+    - text: Taskbar text color
+    - custom: Custom color
+    - gradient: Gradient (custom color to second color)
+    - rainbow: Rainbow
+  - color: "FF1ED760"
+    $name: Custom color
+    $description: >-
+      RRGGBB or AARRGGBB. Used by "Custom color", and as the start of the
+      gradient (at the base of the bars).
+  - color2: "FFB15CFF"
+    $name: Second gradient color
+    $description: RRGGBB or AARRGGBB. The end of the gradient (at the tips of the bars).
+  - opacity: 100
+    $name: Opacity (%)
+  - sensitivity: 100
+    $name: Sensitivity (%)
+    $description: Higher makes the bars taller (10-400).
+  - autoLevel: true
+    $name: Auto level
+    $description: Adapts to the loudness, so quiet and loud music look alike.
+  - riseSpeed: 80
+    $name: Rise speed (1-100)
+  - fallSpeed: 35
+    $name: Fall speed (1-100)
+  - frameRate: 60
+    $name: Frames per second
+    $description: 10-120. Lower uses less CPU.
+  - minFrequency: 50
+    $name: Lowest frequency (Hz)
+  - maxFrequency: 10000
+    $name: Highest frequency (Hz)
+  - source: all
+    $name: Audio source
+    $options:
+    - all: Everything playing on this PC
+    - app: Only the app shown on the widget
+  - onlyWhenPlaying: true
+    $name: Only while the shown track plays on this PC
+    $description: >-
+      Ignores other sounds (notifications, videos) while the widget shows
+      paused music or music playing on another device.
+  - whenSilent: shrink
+    $name: When it's silent
+    $options:
+    - shrink: Fade out and make the widget narrower
+    - keep: Fade out but keep the space
+    - rest: Keep showing flat bars
+  - silenceDelay: 2
+    $name: Seconds of silence before it hides
+  $name: Audio visualizer
 */
 // ==/WindhawkModSettings==
 
@@ -142,6 +266,11 @@ Notes:
 #include <shlwapi.h>
 #include <shobjidl.h>
 #include <tlhelp32.h>
+#include <appmodel.h>
+#include <mmdeviceapi.h>
+#include <audioclient.h>
+#include <audiopolicy.h>
+#include <endpointvolume.h>
 #include <uiautomation.h>
 #include <uxtheme.h>
 #include <wincodec.h>
@@ -920,6 +1049,35 @@ struct Settings {
     bool popupAnimations = true;
     bool popupClassic = false;  // force the DirectComposition + DWM blur popup
     bool overlayMode = false;
+
+    struct Scroll {
+        bool enabled = true;
+        bool system = false;  // Windows master volume instead of the playing app
+        int step = 5;         // percent per wheel notch
+        bool invert = false;
+        bool indicator = true;
+    } scroll;
+
+    struct Viz {
+        bool enabled = true;
+        enum class Style { Bars, Mirrored, Line, Dots, Wave } style = Style::Bars;
+        enum class Pos { BeforeControls, AfterControls, BeforeCover } position = Pos::AfterControls;
+        int width = 32, height = 20;  // px at 100%
+        int bars = 6, gap = 2;
+        int roundness = 100;  // percent
+        bool peaks = false, mirror = false;
+        enum class Color { Accent, Text, Custom, Gradient, Rainbow } colorMode = Color::Accent;
+        uint32_t color = 0xFF1ED760, color2 = 0xFFB15CFF;  // AARRGGBB
+        int opacity = 100, sensitivity = 100;
+        bool autoLevel = true;
+        int riseSpeed = 80, fallSpeed = 35;
+        int frameRate = 60;
+        int minHz = 50, maxHz = 10000;
+        bool appOnly = false;  // capture only the app shown on the widget
+        bool onlyWhenPlaying = true;
+        enum class Silent { Shrink, Keep, Rest } whenSilent = Silent::Shrink;
+        int silenceDelayMs = 2000;
+    } viz;
 };
 
 // Parses "AARRGGBB" or "RRGGBB" (optionally with a leading '#').
@@ -942,6 +1100,63 @@ static std::shared_ptr<const Settings> g_settings = std::make_shared<Settings>()
 static std::shared_ptr<const Settings> GetSettings() {
     std::lock_guard<std::mutex> lock(g_settingsMutex);
     return g_settings;
+}
+
+static std::wstring StringSetting(const wchar_t* name) {
+    PCWSTR v = Wh_GetStringSetting(name);
+    std::wstring s = v ? v : L"";
+    Wh_FreeStringSetting(v);
+    return s;
+}
+
+static int IntSetting(const wchar_t* name, int lo, int hi) {
+    return std::clamp(Wh_GetIntSetting(name), lo, hi);
+}
+
+static void LoadVisualizerSettings(Settings::Viz& v) {
+    using V = Settings::Viz;
+    v.enabled = Wh_GetIntSetting(L"visualizer.enabled") != 0;
+    std::wstring style = StringSetting(L"visualizer.style");
+    v.style = style == L"mirrored" ? V::Style::Mirrored
+              : style == L"line"   ? V::Style::Line
+              : style == L"dots"   ? V::Style::Dots
+              : style == L"wave"   ? V::Style::Wave
+                                   : V::Style::Bars;
+    std::wstring pos = StringSetting(L"visualizer.position");
+    v.position = pos == L"beforeControls" ? V::Pos::BeforeControls
+                 : pos == L"beforeCover"  ? V::Pos::BeforeCover
+                                          : V::Pos::AfterControls;
+    v.width = IntSetting(L"visualizer.width", 8, 200);
+    v.height = IntSetting(L"visualizer.height", 4, 48);
+    v.bars = IntSetting(L"visualizer.bars", 2, 48);
+    v.gap = IntSetting(L"visualizer.gap", 0, 20);
+    v.roundness = IntSetting(L"visualizer.roundness", 0, 100);
+    v.peaks = Wh_GetIntSetting(L"visualizer.peaks") != 0;
+    v.mirror = Wh_GetIntSetting(L"visualizer.mirror") != 0;
+    std::wstring color = StringSetting(L"visualizer.colorMode");
+    v.colorMode = color == L"text"       ? V::Color::Text
+                  : color == L"custom"   ? V::Color::Custom
+                  : color == L"gradient" ? V::Color::Gradient
+                  : color == L"rainbow"  ? V::Color::Rainbow
+                                         : V::Color::Accent;
+    if (!ParseArgb(StringSetting(L"visualizer.color"), v.color)) v.color = 0xFF1ED760;
+    if (!ParseArgb(StringSetting(L"visualizer.color2"), v.color2)) v.color2 = 0xFFB15CFF;
+    v.opacity = IntSetting(L"visualizer.opacity", 0, 100);
+    v.sensitivity = IntSetting(L"visualizer.sensitivity", 10, 400);
+    v.autoLevel = Wh_GetIntSetting(L"visualizer.autoLevel") != 0;
+    v.riseSpeed = IntSetting(L"visualizer.riseSpeed", 1, 100);
+    v.fallSpeed = IntSetting(L"visualizer.fallSpeed", 1, 100);
+    v.frameRate = IntSetting(L"visualizer.frameRate", 10, 120);
+    v.minHz = IntSetting(L"visualizer.minFrequency", 20, 15000);
+    v.maxHz = IntSetting(L"visualizer.maxFrequency", 100, 22000);
+    if (v.maxHz < v.minHz * 2) v.maxHz = std::min(22000, v.minHz * 2);
+    v.appOnly = StringSetting(L"visualizer.source") == L"app";
+    v.onlyWhenPlaying = Wh_GetIntSetting(L"visualizer.onlyWhenPlaying") != 0;
+    std::wstring silent = StringSetting(L"visualizer.whenSilent");
+    v.whenSilent = silent == L"keep"   ? V::Silent::Keep
+                   : silent == L"rest" ? V::Silent::Rest
+                                       : V::Silent::Shrink;
+    v.silenceDelayMs = IntSetting(L"visualizer.silenceDelay", 0, 600) * 1000;
 }
 
 static void LoadSettings() {
@@ -978,8 +1193,27 @@ static void LoadSettings() {
         Wh_FreeStringSetting(engine);
     }
     s->overlayMode = Wh_GetIntSetting(L"overlayMode") != 0;
+    s->scroll.enabled = Wh_GetIntSetting(L"scrollVolume.enabled") != 0;
+    s->scroll.system = StringSetting(L"scrollVolume.target") == L"system";
+    s->scroll.step = IntSetting(L"scrollVolume.step", 1, 25);
+    s->scroll.invert = Wh_GetIntSetting(L"scrollVolume.invert") != 0;
+    s->scroll.indicator = Wh_GetIntSetting(L"scrollVolume.indicator") != 0;
+    LoadVisualizerSettings(s->viz);
     std::lock_guard<std::mutex> lock(g_settingsMutex);
     g_settings = s;
+}
+
+// The name Spotify gives this PC as a Connect device.
+static std::wstring ThisComputerName() {
+    static std::wstring& name = *new std::wstring([] {
+        wchar_t buf[256];
+        DWORD len = ARRAYSIZE(buf);
+        if (GetComputerNameExW(ComputerNameDnsHostname, buf, &len)) return std::wstring(buf, len);
+        len = ARRAYSIZE(buf);
+        if (GetComputerNameW(buf, &len)) return std::wstring(buf, len);
+        return std::wstring();
+    }());
+    return name;
 }
 
 }  // namespace tp
@@ -1461,6 +1695,49 @@ static std::wstring FileDescription(const std::wstring& path) {
     wchar_t* value = nullptr;
     if (!VerQueryValueW(data.data(), key, (void**)&value, &len) || !value || !len) return {};
     return value;
+}
+
+// Finding an app's main window by its AppUserModelID (or exe name).
+static const PROPERTYKEY kPKEY_AppUserModel_ID = {
+    {0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}}, 5};
+
+struct FindWindowCtx {
+    std::wstring aumid, exe;
+    HWND found = nullptr;
+};
+
+static BOOL CALLBACK FindAppWindowProc(HWND hwnd, LPARAM lp) {
+    auto* ctx = (FindWindowCtx*)lp;
+    if (!IsWindowVisible(hwnd) || GetWindow(hwnd, GW_OWNER)) return TRUE;
+    if (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) return TRUE;
+    if (GetWindowTextLengthW(hwnd) == 0) return TRUE;
+    com_ptr<IPropertyStore> store;
+    if (SUCCEEDED(SHGetPropertyStoreForWindow(hwnd, __uuidof(IPropertyStore), store.put_void()))) {
+        PROPVARIANT pv;
+        PropVariantInit(&pv);
+        if (SUCCEEDED(store->GetValue(kPKEY_AppUserModel_ID, &pv)) && pv.vt == VT_LPWSTR &&
+            pv.pwszVal && _wcsicmp(pv.pwszVal, ctx->aumid.c_str()) == 0) {
+            ctx->found = hwnd;
+        }
+        PropVariantClear(&pv);
+        if (ctx->found) return FALSE;
+    }
+    if (!ctx->exe.empty()) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hwnd, &pid);
+        HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (proc) {
+            wchar_t path[MAX_PATH * 2];
+            DWORD len = ARRAYSIZE(path);
+            if (QueryFullProcessImageNameW(proc, 0, path, &len)) {
+                const wchar_t* name = wcsrchr(path, L'\\');
+                name = name ? name + 1 : path;
+                if (_wcsicmp(name, ctx->exe.c_str()) == 0) ctx->found = hwnd;
+            }
+            CloseHandle(proc);
+        }
+    }
+    return ctx->found ? FALSE : TRUE;
 }
 
 static std::shared_ptr<AppInfo> ResolveAppInfo(const std::wstring& aumid) {
@@ -3628,6 +3905,7 @@ class Surface : public Canvas {
         old_ = nullptr;
         bits_ = nullptr;
         w = h = 0;
+        boundW_ = boundH_ = -1;
     }
 
     bool Resize(int nw, int nh) {
@@ -3652,6 +3930,7 @@ class Surface : public Canvas {
         if (!old_) old_ = prev;
         if (bmp_) DeleteObject(bmp_);
         bmp_ = bmp;
+        boundW_ = boundH_ = -1;  // bind the render target to the new bitmap
         bits_ = bits;
         w = nw;
         h = nh;
@@ -3662,14 +3941,20 @@ class Surface : public Canvas {
         if (!dc_) return nullptr;
         if (!rt_) {
             D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
-                D2D1_RENDER_TARGET_TYPE_DEFAULT,
+                software ? D2D1_RENDER_TARGET_TYPE_SOFTWARE : D2D1_RENDER_TARGET_TYPE_DEFAULT,
                 D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.f,
                 96.f, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_FEATURE_LEVEL_DEFAULT);
             if (FAILED(g_gfx->D2D()->CreateDCRenderTarget(&props, rt_.put()))) return nullptr;
             gen++;
         }
-        RECT rc{0, 0, w, h};
-        if (FAILED(rt_->BindDC(dc_, &rc))) return nullptr;
+        // Binding is only needed when the bitmap changed (it is costly per frame).
+        if (boundW_ != w || boundH_ != h || boundGen_ != gen) {
+            RECT rc{0, 0, w, h};
+            if (FAILED(rt_->BindDC(dc_, &rc))) return nullptr;
+            boundW_ = w;
+            boundH_ = h;
+            boundGen_ = gen;
+        }
         rt_->BeginDraw();
         rt_->SetTransform(D2D1::Matrix3x2F::Identity());
         rt_->Clear(D2D1_COLOR_F{0, 0, 0, 0});
@@ -3702,7 +3987,13 @@ class Surface : public Canvas {
     ID2D1RenderTarget* Target() const override { return rt_.get(); }
     const void* Bits() const { return bits_; }
 
+    // Draw on the CPU: cheaper for small surfaces redrawn every frame (no
+    // copy back from the GPU). Set before the first Begin().
+    bool software = false;
+
    private:
+    int boundW_ = -1, boundH_ = -1;
+    uint32_t boundGen_ = ~0u;
     HDC dc_ = nullptr;
     HBITMAP bmp_ = nullptr;
     HGDIOBJ old_ = nullptr;
@@ -4419,6 +4710,1614 @@ static bool IsLightTaskbar() {
 namespace tp {
 
 // ============================================================================
+// Audio: spectrum analysis, app volume, loopback capture and the visualizer
+// ============================================================================
+
+constexpr UINT WM_TP_VIZFRAME = WM_APP + 0x354;  // the audio tap has a new frame
+constexpr UINT WM_TP_VOLUME = WM_APP + 0x355;    // a volume change finished (wParam: level | flags | before << 16)
+constexpr WPARAM kVolMuted = 0x100, kVolSystem = 0x200, kVolFailed = 0x400, kVolHasBefore = 0x800;
+
+#ifdef TP_HARNESS
+// Where the time goes (test harness only), in microseconds.
+static std::atomic<uint64_t> g_dbgAnalysisUs{0}, g_dbgDrawUs{0}, g_dbgPresentUs{0};
+static uint64_t DbgNowUs() {
+    LARGE_INTEGER f, c;
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&c);
+    return (uint64_t)(c.QuadPart * 1000000 / f.QuadPart);
+}
+#endif
+
+// ---------------------------------------------------------------------------
+// Spectrum analysis (pure functions, covered by the harness self-test)
+// ---------------------------------------------------------------------------
+
+// Radix-2 FFT of a Hann-windowed block of samples.
+class Spectrum {
+   public:
+    // `n` must be a power of two.
+    void Prepare(int n) {
+        if (n == n_) return;
+        n_ = n;
+        window_.resize(n);
+        re_.resize(n);
+        im_.resize(n);
+        cos_.resize(n / 2);
+        sin_.resize(n / 2);
+        rev_.resize(n);
+        const double pi = 3.14159265358979323846;
+        for (int i = 0; i < n; i++) window_[i] = (float)(0.5 - 0.5 * std::cos(2 * pi * i / n));
+        for (int i = 0; i < n / 2; i++) {
+            cos_[i] = (float)std::cos(2 * pi * i / n);
+            sin_[i] = (float)-std::sin(2 * pi * i / n);
+        }
+        int bits = 0;
+        while ((1 << bits) < n) bits++;
+        for (int i = 0; i < n; i++) {
+            int r = 0;
+            for (int b = 0; b < bits; b++)
+                if (i & (1 << b)) r |= 1 << (bits - 1 - b);
+            rev_[i] = r;
+        }
+    }
+    int Size() const { return n_; }
+
+    // Power of bins 0..n/2, scaled so that a full-scale sine gives ~1 in its bin.
+    void Power(const float* samples, std::vector<float>& out) {
+        int n = n_;
+        for (int i = 0; i < n; i++) {
+            re_[rev_[i]] = samples[i] * window_[i];
+            im_[rev_[i]] = 0;
+        }
+        for (int len = 2; len <= n; len <<= 1) {
+            int half = len / 2, step = n / len;
+            for (int i = 0; i < n; i += len) {
+                for (int j = 0; j < half; j++) {
+                    float wr = cos_[j * step], wi = sin_[j * step];
+                    int a = i + j, b = a + half;
+                    float tr = re_[b] * wr - im_[b] * wi;
+                    float ti = re_[b] * wi + im_[b] * wr;
+                    re_[b] = re_[a] - tr;
+                    im_[b] = im_[a] - ti;
+                    re_[a] += tr;
+                    im_[a] += ti;
+                }
+            }
+        }
+        out.resize(n / 2 + 1);
+        float norm = 4.f / n;  // a full-scale sine with a Hann window peaks at n/4
+        for (int k = 0; k <= n / 2; k++) {
+            float r = re_[k] * norm, i = im_[k] * norm;
+            out[k] = r * r + i * i;
+        }
+    }
+
+   private:
+    int n_ = 0;
+    std::vector<float> window_, re_, im_, cos_, sin_;
+    std::vector<int> rev_;
+};
+
+// How much each FFT bin contributes to each (logarithmically spaced) band.
+struct BandLayout {
+    struct Tap {
+        int bin;
+        float weight;
+    };
+    std::vector<std::vector<Tap>> bands;
+    std::vector<float> tilt;  // power weight per band (brightens the treble)
+    int count = 0, fftN = 0, minHz = 0, maxHz = 0;
+    float rate = 0;
+};
+
+// Music has less energy in the treble; this evens the bars out.
+constexpr float kTiltDbPerOctave = 2.5f;
+
+static void BuildBands(BandLayout& L, int count, int minHz, int maxHz, float rate, int fftN) {
+    L = BandLayout();
+    L.count = count;
+    L.fftN = fftN;
+    L.minHz = minHz;
+    L.maxHz = maxHz;
+    L.rate = rate;
+    float df = rate / fftN;
+    int maxBin = fftN / 2;
+    float lo0 = (float)minHz, hiN = std::min((float)maxHz, rate / 2 * 0.98f);
+    if (hiN <= lo0 * 1.1f) hiN = lo0 * 2;
+    float ratio = std::pow(hiN / lo0, 1.f / count);
+    L.bands.resize(count);
+    L.tilt.resize(count);
+    for (int b = 0; b < count; b++) {
+        float lo = lo0 * std::pow(ratio, (float)b), hi = lo * ratio;
+        int k0 = std::max(1, (int)std::floor(lo / df - 0.5f));
+        int k1 = std::min(maxBin, (int)std::ceil(hi / df + 0.5f));
+        for (int k = k0; k <= k1; k++) {
+            float binLo = (k - 0.5f) * df, binHi = (k + 0.5f) * df;
+            float overlap = std::min(hi, binHi) - std::max(lo, binLo);
+            if (overlap > 0) L.bands[b].push_back({k, overlap / df});
+        }
+        float fc = std::sqrt(lo * hi);
+        L.tilt[b] = std::pow(fc / 1000.f, kTiltDbPerOctave / 3.0103f);
+    }
+}
+
+// Band power in dB (0 dB = a full-scale sine).
+static void BandsDb(const std::vector<float>& power, const BandLayout& L, float* outDb) {
+    for (int b = 0; b < L.count; b++) {
+        double p = 0;
+        for (auto& t : L.bands[b])
+            if (t.bin < (int)power.size()) p += power[t.bin] * t.weight;
+        outDb[b] = 10.f * std::log10((float)(p * L.tilt[b]) + 1e-12f);
+    }
+}
+
+// Turns band dB values into bar heights (0..1), optionally following the
+// loudness of the music ("auto level").
+struct LevelMapper {
+    static constexpr float kRangeDb = 36.f;     // a bar spans this many dB
+    static constexpr float kFixedTopDb = -8.f;  // full height without auto level
+    static constexpr float kAutoFloorDb = -52.f;
+    float topDb = kAutoFloorDb;
+
+    void Map(const float* db, int n, float dtSec, bool autoLevel, float gainDb, float* out) {
+        float top = kFixedTopDb;
+        if (autoLevel) {
+            float frameMax = -200;
+            for (int i = 0; i < n; i++) frameMax = std::max(frameMax, db[i]);
+            if (frameMax > topDb) topDb += (frameMax - topDb) * std::min(1.f, dtSec / 0.06f);
+            else topDb = std::max(frameMax, topDb - 5.f * dtSec);  // recover 5 dB per second
+            topDb = std::max(topDb, kAutoFloorDb);
+            top = topDb;
+        }
+        for (int i = 0; i < n; i++) out[i] = Clamp01((db[i] + gainDb - (top - kRangeDb)) / kRangeDb);
+    }
+};
+
+// Wheel notches (120 per notch; touchpads send smaller steps) into whole
+// percent steps. Returns the change; the remainder stays in `acc`.
+static int WheelSteps(float& acc, int delta, int stepPercent) {
+    if (delta == 0 || stepPercent <= 0) return 0;
+    if ((acc > 0 && delta < 0) || (acc < 0 && delta > 0)) acc = 0;  // direction changed
+    acc += (float)delta;
+    float units = acc * stepPercent / 120.f;
+    int change = (int)units;  // toward zero
+    acc -= change * 120.f / stepPercent;
+    return change;
+}
+
+// ---------------------------------------------------------------------------
+// Which processes belong to an app (for its volume and for capturing it)
+// ---------------------------------------------------------------------------
+
+struct ProcEntry {
+    DWORD pid = 0, parent = 0;
+    std::wstring exe;  // lowercase file name
+};
+
+static std::vector<ProcEntry> ListProcesses() {
+    std::vector<ProcEntry> out;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return out;
+    PROCESSENTRY32W pe{sizeof(pe)};
+    for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe))
+        out.push_back(ProcEntry{pe.th32ProcessID, pe.th32ParentProcessID, Lower(pe.szExeFile)});
+    CloseHandle(snap);
+    return out;
+}
+
+static std::wstring PackageFamilyOf(DWORD pid) {
+    HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!proc) return {};
+    wchar_t name[128];  // PACKAGE_FAMILY_NAME_MAX_LENGTH is 64 + 1 + 13
+    UINT32 len = ARRAYSIZE(name);
+    std::wstring out;
+    if (GetPackageFamilyName(proc, &len, name) == ERROR_SUCCESS) out = name;
+    CloseHandle(proc);
+    return out;
+}
+
+struct AppAudioId {
+    std::wstring exe;      // lowercase exe file name, e.g. "brave.exe"
+    std::wstring package;  // package family name of Store apps
+    DWORD rootPid = 0;     // the app's top process (its sound includes its children)
+
+    bool Valid() const { return !exe.empty() || !package.empty(); }
+    bool Matches(const ProcEntry& p) const {
+        if (!exe.empty() && p.exe == exe) return true;
+        return !package.empty() && IEquals(PackageFamilyOf(p.pid), package);
+    }
+};
+
+// Maps a media session's AppUserModelID to the app's processes.
+static AppAudioId ResolveAppAudio(const std::wstring& aumid) {
+    AppAudioId id;
+    if (aumid.empty()) return id;
+    auto procs = ListProcesses();
+    auto exeOf = [&](DWORD pid) -> std::wstring {
+        for (auto& p : procs)
+            if (p.pid == pid) return p.exe;
+        return {};
+    };
+    size_t bang = aumid.find(L'!');
+    if (IContains(aumid, L"spotify")) {
+        id.exe = L"spotify.exe";
+    } else if (bang != std::wstring::npos) {
+        id.package = aumid.substr(0, bang);
+    } else if (IContains(aumid, L".exe")) {
+        id.exe = Lower(aumid.substr(aumid.find_last_of(L"\\/") + 1));
+    } else {
+        // Browsers use their own IDs ("Chrome", "MSEdge", "Brave", a hash
+        // for Firefox): find the window that carries it.
+        FindWindowCtx ctx;
+        ctx.aumid = aumid;
+        EnumWindows(FindAppWindowProc, (LPARAM)&ctx);
+        if (ctx.found) {
+            DWORD pid = 0;
+            GetWindowThreadProcessId(ctx.found, &pid);
+            id.exe = exeOf(pid);
+            id.rootPid = pid;
+        }
+        if (id.exe.empty()) id.exe = Lower(aumid) + L".exe";
+    }
+    if (!id.rootPid) {
+        // The top process of the app: its parent isn't part of the app.
+        for (auto& p : procs) {
+            if (!id.Matches(p)) continue;
+            bool parentMatches = false;
+            for (auto& q : procs)
+                if (q.pid == p.parent) parentMatches = id.Matches(q);
+            if (!parentMatches) {
+                id.rootPid = p.pid;
+                break;
+            }
+        }
+    }
+    return id;
+}
+
+// ---------------------------------------------------------------------------
+// Volume: the Windows master volume or one app's Volume Mixer slider
+// ---------------------------------------------------------------------------
+
+static const CLSID kCLSID_MMDeviceEnumerator = {
+    0xBCDE0395, 0xE52F, 0x467C, {0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E}};
+
+static com_ptr<IMMDevice> DefaultRenderDevice() {
+    com_ptr<IMMDeviceEnumerator> en;
+    if (FAILED(CoCreateInstance(kCLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
+                                en.put_void())))
+        return nullptr;
+    com_ptr<IMMDevice> dev;
+    en->GetDefaultAudioEndpoint(eRender, eConsole, dev.put());
+    return dev;
+}
+
+static std::wstring DeviceId(IMMDevice* dev) {
+    if (!dev) return {};
+    LPWSTR id = nullptr;
+    std::wstring out;
+    if (SUCCEEDED(dev->GetId(&id)) && id) out = id;
+    CoTaskMemFree(id);
+    return out;
+}
+
+struct VolumeResult {
+    bool ok = false;
+    int level = -1;   // percent
+    int before = -1;  // percent before the change
+    bool muted = false;
+};
+
+static VolumeResult NudgeSystemVolume(int delta) {
+    VolumeResult r;
+    auto dev = DefaultRenderDevice();
+    com_ptr<IAudioEndpointVolume> vol;
+    if (!dev || FAILED(dev->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr, vol.put_void())))
+        return r;
+    float cur = 0;
+    BOOL mute = FALSE;
+    if (FAILED(vol->GetMasterVolumeLevelScalar(&cur))) return r;
+    vol->GetMute(&mute);
+    int now = (int)std::lround(cur * 100);
+    int next = std::clamp(now + delta, 0, 100);
+    if (next != now) vol->SetMasterVolumeLevelScalar(next / 100.f, nullptr);
+    if (mute && delta > 0) {
+        vol->SetMute(FALSE, nullptr);
+        mute = FALSE;
+    }
+    r.ok = true;
+    r.level = next;
+    r.before = now;
+    r.muted = mute;
+    return r;
+}
+
+// Changes every audio session of the app on the default output device.
+// Fails (ok = false) when the app has no session there.
+static VolumeResult NudgeAppVolume(const AppAudioId& id, int delta, std::wstring* names = nullptr) {
+    VolumeResult r;
+    if (!id.Valid()) return r;
+    auto dev = DefaultRenderDevice();
+    com_ptr<IAudioSessionManager2> mgr;
+    if (!dev || FAILED(dev->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr, mgr.put_void())))
+        return r;
+    com_ptr<IAudioSessionEnumerator> sessions;
+    int count = 0;
+    if (FAILED(mgr->GetSessionEnumerator(sessions.put())) || FAILED(sessions->GetCount(&count))) return r;
+    auto procs = ListProcesses();
+    std::vector<com_ptr<ISimpleAudioVolume>> matched;
+    float cur = -1;
+    BOOL mute = FALSE;
+    bool fromActive = false;
+    for (int i = 0; i < count; i++) {
+        com_ptr<IAudioSessionControl> ctl;
+        if (FAILED(sessions->GetSession(i, ctl.put())) || !ctl) continue;
+        auto ctl2 = ctl.try_as<IAudioSessionControl2>();
+        if (!ctl2 || ctl2->IsSystemSoundsSession() == S_OK) continue;
+        DWORD pid = 0;
+        ctl2->GetProcessId(&pid);
+        if (!pid) continue;
+        const ProcEntry* proc = nullptr;
+        for (auto& p : procs)
+            if (p.pid == pid) proc = &p;
+        if (!proc || !id.Matches(*proc)) continue;
+        auto vol = ctl.try_as<ISimpleAudioVolume>();
+        if (!vol) continue;
+        AudioSessionState state = AudioSessionStateInactive;
+        ctl->GetState(&state);
+        float level = 0;
+        BOOL m = FALSE;
+        vol->GetMasterVolume(&level);
+        vol->GetMute(&m);
+        bool active = state == AudioSessionStateActive;
+        if (cur < 0 || (active && !fromActive)) {
+            cur = level;
+            mute = m;
+            fromActive = active;
+        }
+        if (names) *names += proc->exe + L"(" + std::to_wstring(pid) + L") ";
+        matched.push_back(vol);
+    }
+    if (matched.empty()) return r;
+    int now = (int)std::lround(cur * 100);
+    int next = std::clamp(now + delta, 0, 100);
+    for (auto& v : matched) {
+        if (delta != 0) v->SetMasterVolume(next / 100.f, nullptr);
+        if (mute && delta > 0) v->SetMute(FALSE, nullptr);
+    }
+    r.ok = true;
+    r.level = next;
+    r.before = now;
+    r.muted = mute && delta <= 0;
+    return r;
+}
+
+// Volume changes run on their own thread (Spotify commands on g_cmd can
+// wait out rate limits) and are merged while one is in progress.
+static Worker& g_vol = *new Worker();  // never destroyed, see g_core
+
+class MixerVolume {
+   public:
+    // UI thread. The result is posted to `notify` as WM_TP_VOLUME.
+    void Nudge(bool system, const std::wstring& aumid, int delta, HWND notify) {
+        std::lock_guard<std::mutex> lock(m_);
+        if (system != system_ || aumid != aumid_) pending_ = 0;
+        system_ = system;
+        aumid_ = aumid;
+        notify_ = notify;
+        pending_ += delta;
+        if (queued_) return;
+        queued_ = true;
+        g_vol.Start();
+        if (!g_vol.Post([this] { Run(); })) queued_ = false;
+    }
+
+   private:
+    void Run() {
+        bool system;
+        std::wstring aumid;
+        int delta;
+        HWND notify;
+        {
+            std::lock_guard<std::mutex> lock(m_);
+            system = system_;
+            aumid = aumid_;
+            delta = pending_;
+            notify = notify_;
+            pending_ = 0;
+            queued_ = false;
+        }
+        VolumeResult r;
+        bool fellBack = false;
+        if (!system) {
+            if (aumid != idAumid_ || Tick() - idTick_ > 15000) {
+                id_ = ResolveAppAudio(aumid);
+                idAumid_ = aumid;
+                idTick_ = Tick();
+            }
+            std::wstring names;
+            r = NudgeAppVolume(id_, delta, &names);
+            if (r.ok) {
+                if (aumid != loggedAumid_) Trace(L"Volume: '%s' -> sessions %s", aumid.c_str(), names.c_str());
+                loggedAumid_ = aumid;
+            } else {
+                fellBack = true;
+                if (aumid != loggedAumid_)
+                    Trace(L"Volume: no mixer session for '%s' (exe '%s', package '%s'), using the system volume",
+                          aumid.c_str(), id_.exe.c_str(), id_.package.c_str());
+                loggedAumid_ = aumid;
+            }
+        }
+        if (system || !r.ok) r = NudgeSystemVolume(delta);
+        WPARAM wp = r.ok ? ((WPARAM)std::clamp(r.level, 0, 100) | (r.muted ? kVolMuted : 0) |
+                            (system || fellBack ? kVolSystem : 0) |
+                            (r.before >= 0 ? kVolHasBefore | (WPARAM)std::clamp(r.before, 0, 100) << 16 : 0))
+                         : kVolFailed;
+        if (notify) PostMessageW(notify, WM_TP_VOLUME, wp, 0);
+    }
+
+    std::mutex m_;
+    bool system_ = false, queued_ = false;
+    std::wstring aumid_;
+    int pending_ = 0;
+    HWND notify_ = nullptr;
+    // g_vol thread only:
+    AppAudioId id_;
+    std::wstring idAumid_, loggedAumid_;
+    ULONGLONG idTick_ = 0;
+};
+
+static MixerVolume& g_mixer = *new MixerVolume();  // never destroyed, see g_core
+
+// ---------------------------------------------------------------------------
+// Loopback capture: what the PC (or one app) plays, as mono samples
+// ---------------------------------------------------------------------------
+
+// Process loopback (Windows 10 21H2+), declared here because older SDK
+// headers lack it.
+struct TpProcessLoopbackParams {
+    DWORD targetProcessId;
+    int mode;  // 0 = include the process tree
+};
+struct TpAudioClientActivationParams {
+    int activationType;  // 1 = process loopback
+    TpProcessLoopbackParams loopback;
+};
+using ActivateAudioInterfaceAsyncFn = HRESULT(WINAPI*)(LPCWSTR, REFIID, PROPVARIANT*,
+                                                        IActivateAudioInterfaceCompletionHandler*,
+                                                        IActivateAudioInterfaceAsyncOperation**);
+
+class ActivateHandler : public IActivateAudioInterfaceCompletionHandler, public IAgileObject {
+   public:
+    ActivateHandler() { done = CreateEventW(nullptr, TRUE, FALSE, nullptr); }
+    virtual ~ActivateHandler() {
+        if (done) CloseHandle(done);
+    }
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IActivateAudioInterfaceCompletionHandler))
+            *ppv = static_cast<IActivateAudioInterfaceCompletionHandler*>(this);
+        else if (riid == __uuidof(IAgileObject))
+            *ppv = static_cast<IAgileObject*>(this);
+        else {
+            *ppv = nullptr;
+            return E_NOINTERFACE;
+        }
+        AddRef();
+        return S_OK;
+    }
+    STDMETHODIMP_(ULONG) AddRef() override { return ++refs_; }
+    STDMETHODIMP_(ULONG) Release() override {
+        ULONG r = --refs_;
+        if (!r) delete this;
+        return r;
+    }
+    STDMETHODIMP ActivateCompleted(IActivateAudioInterfaceAsyncOperation* op) override {
+        HRESULT hr = E_FAIL;
+        com_ptr<IUnknown> unk;
+        if (SUCCEEDED(op->GetActivateResult(&hr, unk.put())) && SUCCEEDED(hr) && unk)
+            unk->QueryInterface(__uuidof(IAudioClient), client.put_void());
+        result = hr;
+        SetEvent(done);
+        return S_OK;
+    }
+
+    HANDLE done = nullptr;
+    HRESULT result = E_PENDING;
+    com_ptr<IAudioClient> client;
+
+   private:
+    std::atomic<ULONG> refs_{1};
+};
+
+class CaptureStream {
+   public:
+    ~CaptureStream() { Close(); }
+
+    // Everything played on the default output device.
+    bool OpenSystem(std::wstring& deviceId) {
+        Close();
+        auto dev = DefaultRenderDevice();
+        if (!dev) return false;
+        deviceId = DeviceId(dev.get());
+        com_ptr<IAudioClient> client;
+        if (FAILED(dev->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, client.put_void()))) return false;
+        WAVEFORMATEX* fmt = nullptr;
+        if (FAILED(client->GetMixFormat(&fmt)) || !fmt) return false;
+        bool ok = Start(client.get(), fmt, false);
+        CoTaskMemFree(fmt);
+        return ok;
+    }
+
+    // Only what one process (and its children) plays.
+    bool OpenProcess(DWORD pid) {
+        Close();
+        static auto activate = (ActivateAudioInterfaceAsyncFn)GetProcAddress(
+            LoadLibraryW(L"mmdevapi.dll"), "ActivateAudioInterfaceAsync");
+        if (!activate || !pid) return false;
+        TpAudioClientActivationParams params{1, {pid, 0}};
+        PROPVARIANT pv;
+        PropVariantInit(&pv);
+        pv.vt = VT_BLOB;
+        pv.blob.cbSize = sizeof(params);
+        pv.blob.pBlobData = (BYTE*)&params;
+        com_ptr<ActivateHandler> handler;
+        handler.attach(new ActivateHandler());
+        com_ptr<IActivateAudioInterfaceAsyncOperation> op;
+        HRESULT hr = activate(L"VAD\\Process_Loopback", __uuidof(IAudioClient), &pv, handler.get(), op.put());
+        if (FAILED(hr) || WaitForSingleObject(handler->done, 3000) != WAIT_OBJECT_0 || FAILED(handler->result) ||
+            !handler->client) {
+            Trace(L"Process loopback activation failed: 0x%08X / 0x%08X", (unsigned)hr, (unsigned)handler->result);
+            return false;
+        }
+        WAVEFORMATEX fmt{};
+        fmt.wFormatTag = WAVE_FORMAT_PCM;
+        fmt.nChannels = 2;
+        fmt.nSamplesPerSec = 48000;
+        fmt.wBitsPerSample = 16;
+        fmt.nBlockAlign = 4;
+        fmt.nAvgBytesPerSec = 48000 * 4;
+        return Start(handler->client.get(), &fmt, true);
+    }
+
+    void Close() {
+        if (client_) client_->Stop();
+        capture_ = nullptr;
+        client_ = nullptr;
+        if (event_) {
+            CloseHandle(event_);
+            event_ = nullptr;
+        }
+    }
+
+    bool IsOpen() const { return capture_ != nullptr; }
+    int Rate() const { return rate_; }
+    int BufferMs() const { return bufferMs_; }
+    HANDLE DataEvent() const { return capture_ ? event_ : nullptr; }  // set when data is ready (process loopback)
+
+    // Appends all available audio as mono samples. Returns false if the
+    // stream broke (device removed or changed format).
+    bool Read(std::vector<float>& mono) {
+        if (!capture_) return false;
+        UINT32 packet = 0;
+        HRESULT hr;
+        while (SUCCEEDED(hr = capture_->GetNextPacketSize(&packet)) && packet > 0) {
+            BYTE* data = nullptr;
+            UINT32 frames = 0;
+            DWORD flags = 0;
+            hr = capture_->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
+            if (FAILED(hr)) break;
+            size_t base = mono.size();
+            mono.resize(base + frames);
+            if ((flags & AUDCLNT_BUFFERFLAGS_SILENT) || !data) {
+                std::fill(mono.begin() + base, mono.end(), 0.f);
+            } else {
+                for (UINT32 f = 0; f < frames; f++) {
+                    const BYTE* frame = data + (size_t)f * blockAlign_;
+                    float sum = 0;
+                    for (int c = 0; c < channels_; c++) sum += SampleAt(frame, c);
+                    mono[base + f] = sum / channels_;
+                }
+            }
+            capture_->ReleaseBuffer(frames);
+        }
+        return SUCCEEDED(hr);
+    }
+
+   private:
+    bool Start(IAudioClient* client, const WAVEFORMATEX* fmt, bool process) {
+        rate_ = (int)fmt->nSamplesPerSec;
+        channels_ = std::max<int>(1, fmt->nChannels);
+        bits_ = fmt->wBitsPerSample;
+        blockAlign_ = fmt->nBlockAlign;
+        float_ = fmt->wFormatTag == WAVE_FORMAT_IEEE_FLOAT;
+        if (fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE && fmt->cbSize >= 22)
+            float_ = ((const WAVEFORMATEXTENSIBLE*)fmt)->SubFormat.Data1 == 3;  // KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
+        if (!(float_ ? bits_ == 32 : (bits_ == 16 || bits_ == 24 || bits_ == 32))) {
+            Trace(L"Unsupported capture format: %d bits, tag %d", bits_, fmt->wFormatTag);
+            return false;
+        }
+        // Process loopback ignores the buffer size (it gives 10 ms), so it
+        // signals an event whenever data is ready and the tap drains it then.
+        DWORD flags = AUDCLNT_STREAMFLAGS_LOOPBACK;
+        if (process) flags |= AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM;
+        HRESULT hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 3000000 /* 300 ms */, 0, fmt, nullptr);
+        if (FAILED(hr)) {
+            Trace(L"Capture Initialize failed: 0x%08X", (unsigned)hr);
+            return false;
+        }
+        if (process) {
+            event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+            if (!event_ || FAILED(client->SetEventHandle(event_))) return false;
+        }
+        com_ptr<IAudioCaptureClient> capture;
+        if (FAILED(client->GetService(__uuidof(IAudioCaptureClient), capture.put_void()))) return false;
+        if (FAILED(client->Start())) return false;
+        UINT32 frames = 0;
+        client->GetBufferSize(&frames);
+        bufferMs_ = rate_ > 0 ? (int)(frames * 1000LL / rate_) : 0;
+        Trace(L"Capture buffer: %u frames (%d ms)", frames, bufferMs_);
+        client_.copy_from(client);
+        capture_ = capture;
+        return true;
+    }
+
+    float SampleAt(const BYTE* frame, int c) const {
+        int bytes = bits_ / 8;
+        const BYTE* p = frame + c * bytes;
+        if (float_) {
+            float v;
+            memcpy(&v, p, 4);
+            return v;
+        }
+        switch (bits_) {
+            case 16: {
+                int16_t v;
+                memcpy(&v, p, 2);
+                return v / 32768.f;
+            }
+            case 24: {
+                int32_t v = (int32_t)((uint32_t)p[0] << 8 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 24);
+                return v / 2147483648.f;
+            }
+            default: {
+                int32_t v;
+                memcpy(&v, p, 4);
+                return v / 2147483648.f;
+            }
+        }
+    }
+
+    com_ptr<IAudioClient> client_;
+    com_ptr<IAudioCaptureClient> capture_;
+    HANDLE event_ = nullptr;
+    int rate_ = 48000, channels_ = 2, bits_ = 32, blockAlign_ = 8, bufferMs_ = 0;
+    bool float_ = true;
+};
+
+// ---------------------------------------------------------------------------
+// The audio tap: a thread that captures, analyzes and hands frames to the
+// visualizer. It only runs in the explorer process that owns the taskbar
+// (the visualizer starts it) and is joined when the mod unloads.
+// ---------------------------------------------------------------------------
+
+struct TapConfig {
+    bool active = false;   // capture at all
+    bool fast = false;     // frames at `fps` (otherwise ~10 per second)
+    bool appOnly = false;  // only the app `aumid`
+    std::wstring aumid;
+    int bands = 6, minHz = 50, maxHz = 10000, fps = 60, wavePoints = 48;
+    bool autoLevel = true;
+    int sensitivity = 100;
+    HWND notify = nullptr;
+
+    bool operator==(const TapConfig& o) const {
+        return active == o.active && fast == o.fast && appOnly == o.appOnly && aumid == o.aumid &&
+               bands == o.bands && minHz == o.minHz && maxHz == o.maxHz && fps == o.fps &&
+               wavePoints == o.wavePoints && autoLevel == o.autoLevel && sensitivity == o.sensitivity &&
+               notify == o.notify;
+    }
+};
+
+struct TapFrame {
+    std::vector<float> bands;  // 0..1
+    std::vector<float> wave;   // -1..1
+    ULONGLONG lastSound = 0;   // when the sound was last above the silence threshold
+    ULONGLONG soundSince = 0;  // start of the current stretch of sound
+    float rmsDb = -120;        // loudness of the last captured audio
+    bool capturing = false;
+    uint64_t seq = 0;
+};
+
+class AudioTap {
+   public:
+    // UI thread.
+    void Configure(const TapConfig& c) {
+        {
+            std::lock_guard<std::mutex> lock(m_);
+            if (cfg_ == c && running_) return;
+            // A new window: a frame message posted to the old one never arrives.
+            if (c.notify != cfg_.notify) framePosted = false;
+            cfg_ = c;
+            gen_++;
+            if (!running_ && c.active && !g_shuttingDown) {
+                if (!wake_) wake_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+                stop_ = false;
+                running_ = true;
+                thread_ = std::thread([this] { Run(); });
+            }
+        }
+        if (wake_) SetEvent(wake_);
+    }
+
+    void Read(TapFrame& out) {
+        std::lock_guard<std::mutex> lock(m_);
+        out = frame_;
+    }
+
+    // Stops the thread (mod unload).
+    void Shutdown() {
+        {
+            std::lock_guard<std::mutex> lock(m_);
+            stop_ = true;
+        }
+        if (wake_) SetEvent(wake_);
+        if (thread_.joinable()) thread_.join();
+        std::lock_guard<std::mutex> lock(m_);
+        running_ = false;
+        cfg_ = TapConfig();
+        framePosted = false;
+        frame_ = TapFrame();
+    }
+
+    std::atomic<bool> framePosted{false};
+    std::atomic<uint64_t> samplesRead{0};  // diagnostics
+
+   private:
+    void Run() {
+        CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, 0x00000002 /*HIGH_RESOLUTION*/, TIMER_ALL_ACCESS);
+        if (!timer) timer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
+        CaptureStream stream;
+        Spectrum fft;
+        BandLayout layout;
+        LevelMapper mapper;
+        std::vector<float> ring(1 << 15), mono, block, power, db, levels, wave;
+        uint64_t written = 0;  // samples written to the ring in total
+        TapConfig cfg;
+        uint64_t cfgGen = ~0ull;
+        std::wstring deviceId, openedFor;
+        DWORD targetPid = 0;
+        ULONGLONG retryAt = 0, lastDeviceCheck = 0, lastPacket = 0, lastFill = 0, lastAnalysis = Tick();
+        ULONGLONG lastSound = 0, soundSince = 0, lastResolve = 0;
+        float wavePeak = 0.05f, lastRmsDb = -120;
+        bool loggedFail = false;
+
+        auto push = [&](const float* s, size_t n) {
+            size_t cap = ring.size();
+            for (size_t i = 0; i < n; i++) ring[(written + i) % cap] = s[i];
+            written += n;
+        };
+        auto last = [&](size_t n, std::vector<float>& out) {
+            size_t cap = ring.size();
+            out.resize(n);
+            for (size_t i = 0; i < n; i++) {
+                uint64_t idx = written >= n ? written - n + i : 0;
+                out[i] = written >= n ? ring[idx % cap] : 0.f;
+            }
+        };
+
+        while (true) {
+            {
+                std::lock_guard<std::mutex> lock(m_);
+                if (stop_) break;
+                if (gen_ != cfgGen) {
+                    cfg = cfg_;
+                    cfgGen = gen_;
+                }
+            }
+            ULONGLONG now = Tick();
+            if (!cfg.active) {
+                if (stream.IsOpen()) {
+                    stream.Close();
+                    openedFor.clear();
+                    Trace(L"Visualizer capture stopped");
+                }
+                {
+                    std::lock_guard<std::mutex> lock(m_);
+                    frame_.capturing = false;
+                    std::fill(frame_.bands.begin(), frame_.bands.end(), 0.f);
+                    std::fill(frame_.wave.begin(), frame_.wave.end(), 0.f);
+                }
+                WaitForSingleObject(wake_, INFINITE);
+                continue;
+            }
+
+            std::wstring want = cfg.appOnly ? L"app:" + cfg.aumid : L"system";
+            if (stream.IsOpen() && want != openedFor) {
+                stream.Close();
+                retryAt = 0;
+            }
+            if (!stream.IsOpen() && now >= retryAt) {
+                bool ok = false;
+                if (cfg.appOnly) {
+                    targetPid = ResolveAppAudio(cfg.aumid).rootPid;
+                    lastResolve = now;
+                    ok = targetPid && stream.OpenProcess(targetPid);
+                } else {
+                    ok = stream.OpenSystem(deviceId);
+                }
+                openedFor = want;
+                if (ok) {
+                    Trace(L"Visualizer capturing %s (pid %u) at %d Hz", cfg.appOnly ? cfg.aumid.c_str() : L"all sound",
+                          cfg.appOnly ? targetPid : 0, stream.Rate());
+                    loggedFail = false;
+                    lastPacket = lastFill = now;
+                    lastDeviceCheck = now;
+                } else {
+                    if (!loggedFail)
+                        Trace(L"Visualizer capture failed (%s, pid %u), retrying", want.c_str(), targetPid);
+                    loggedFail = true;
+                    retryAt = now + 3000;
+                }
+            }
+
+            float rate = (float)(stream.IsOpen() ? stream.Rate() : 48000);
+            int fftN = 2048;
+            while (fftN < rate * 0.04f && fftN < 16384) fftN <<= 1;  // ~40 ms of sound
+            fft.Prepare(fftN);
+            if (layout.count != cfg.bands || layout.fftN != fftN || layout.rate != rate ||
+                layout.minHz != cfg.minHz || layout.maxHz != cfg.maxHz)
+                BuildBands(layout, cfg.bands, cfg.minHz, cfg.maxHz, rate, fftN);
+
+            bool sound = false;
+            mono.clear();
+            if (stream.IsOpen() && !stream.Read(mono)) {
+                Trace(L"Visualizer capture stream broke, reopening");
+                stream.Close();
+                retryAt = now + 500;
+            }
+            if (!mono.empty()) {
+                push(mono.data(), mono.size());
+                samplesRead += mono.size();
+                lastPacket = lastFill = now;
+                double sum = 0;
+                for (float v : mono) sum += (double)v * v;
+                float rmsDb = 10.f * std::log10((float)(sum / mono.size()) + 1e-12f);
+                sound = rmsDb > -58.f;
+                lastRmsDb = rmsDb;
+            } else if (now - lastPacket > 60) {
+                // Nothing is playing (the device then delivers no data) or
+                // there is no stream: feed silence so the bars fall to zero.
+                size_t n = (size_t)((now - lastFill) * rate / 1000);
+                if (n) {
+                    mono.assign(std::min<size_t>(n, ring.size()), 0.f);
+                    push(mono.data(), mono.size());
+                }
+                lastFill = now;
+            }
+            if (stream.IsOpen()) {
+                if (!cfg.appOnly && now - lastDeviceCheck > 2000) {
+                    lastDeviceCheck = now;
+                    if (DeviceId(DefaultRenderDevice().get()) != deviceId) {
+                        Trace(L"Default output device changed, reopening the capture");
+                        stream.Close();
+                        retryAt = 0;
+                    }
+                }
+                if (cfg.appOnly && now - lastPacket > 4000 && now - lastResolve > 4000) {
+                    // The app may have restarted.
+                    lastResolve = now;
+                    DWORD pid = ResolveAppAudio(cfg.aumid).rootPid;
+                    if (pid != targetPid) {
+                        stream.Close();
+                        retryAt = 0;
+                    }
+                }
+            }
+            if (sound) {
+                if (!lastSound || now - lastSound > 400) soundSince = now;
+                lastSound = now;
+            }
+
+            // Analysis, at the frame rate (data may arrive more often).
+            DWORD interval = cfg.fast ? std::max(8, 1000 / std::max(1, cfg.fps)) : 100;
+            if (now < lastAnalysis + interval - 2) {
+                WaitForWork(timer, stream.DataEvent(), (DWORD)(lastAnalysis + interval - now));
+                continue;
+            }
+            float dt = std::clamp((now - lastAnalysis) / 1000.f, 0.001f, 0.5f);
+            lastAnalysis = now;
+#ifdef TP_HARNESS
+            uint64_t dbgT0 = DbgNowUs();
+#endif
+            last((size_t)fftN, block);
+            fft.Power(block.data(), power);
+            db.resize(cfg.bands);
+            levels.resize(cfg.bands);
+            BandsDb(power, layout, db.data());
+            float gainDb = 20.f * std::log10(cfg.sensitivity / 100.f);
+            mapper.Map(db.data(), cfg.bands, dt, cfg.autoLevel, gainDb, levels.data());
+
+            // Wave: ~25 ms of sound starting at a rising zero crossing, so the
+            // shape stands still instead of jittering.
+            size_t span = (size_t)(rate * 0.025f), search = (size_t)(rate * 0.02f);
+            last(span + search, block);
+            size_t start = 0;
+            for (size_t i = search; i > 1; i--) {
+                if (block[i - 1] < 0 && block[i] >= 0) {
+                    start = i;
+                    break;
+                }
+            }
+            float peak = 0;
+            for (size_t i = start; i < start + span; i++) peak = std::max(peak, std::fabs(block[i]));
+            wavePeak = std::max({peak, wavePeak * std::exp(-dt / 1.5f), 0.01f});
+            float scale = (cfg.autoLevel ? 0.9f / wavePeak : 1.f) * cfg.sensitivity / 100.f;
+            int P = std::max(4, cfg.wavePoints);
+
+            wave.resize(P);
+            for (int i = 0; i < P; i++) {
+                float pos = start + (float)i * (span - 1) / (P - 1);
+                size_t k = std::min((size_t)pos, block.size() - 2);
+                float t = pos - k;
+                float v = block[k] * (1 - t) + block[k + 1] * t;
+                wave[i] = std::clamp(v * scale, -1.f, 1.f);
+            }
+            {
+                std::lock_guard<std::mutex> lock(m_);
+                frame_.bands = levels;
+                frame_.wave = wave;
+                frame_.lastSound = lastSound;
+                frame_.soundSince = soundSince;
+                frame_.rmsDb = lastRmsDb;
+                frame_.capturing = stream.IsOpen();
+                frame_.seq++;
+            }
+#ifdef TP_HARNESS
+            g_dbgAnalysisUs += DbgNowUs() - dbgT0;
+#endif
+            if (cfg.notify && !framePosted.exchange(true))
+                if (!PostMessageW(cfg.notify, WM_TP_VIZFRAME, 0, 0)) framePosted = false;
+
+            WaitForWork(timer, stream.DataEvent(), interval);
+        }
+        stream.Close();
+        if (timer) CloseHandle(timer);
+        CoUninitialize();
+    }
+
+    // Sleeps until the next frame is due, new audio data is ready or the
+    // configuration changed.
+    void WaitForWork(HANDLE timer, HANDLE data, DWORD ms) {
+        HANDLE handles[3] = {wake_, timer, data};
+        DWORD n = 1;
+        LARGE_INTEGER due;
+        due.QuadPart = -(LONGLONG)ms * 10000;
+        if (timer && SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) n = 2;
+        if (data) {
+            if (n == 1) handles[1] = data;
+            n++;
+        }
+        WaitForMultipleObjects(n, handles, FALSE, ms + 50);
+    }
+
+    std::mutex m_;
+    std::thread thread_;
+    HANDLE wake_ = nullptr;
+    bool running_ = false, stop_ = false;
+    TapConfig cfg_;
+    uint64_t gen_ = 0;
+    TapFrame frame_;
+};
+
+static AudioTap& g_tap = *new AudioTap();  // never destroyed, see g_core
+
+// ---------------------------------------------------------------------------
+// The visualizer: a small click-through window on top of the widget, so the
+// animation only redraws this strip and not the whole widget.
+// ---------------------------------------------------------------------------
+
+class Visualizer {
+   public:
+    static constexpr const wchar_t* kClass = L"TaskbarPlayer_Visualizer";
+
+    struct Context {
+        bool on = false;        // the feature is enabled and the widget shows a track
+        bool gateOpen = false;  // allowed to react to sound right now
+        std::wstring aumid;     // app shown on the widget (for "only this app")
+        bool hasAccent = false;
+        D2D1_COLOR_F accent{1, 1, 1, 1};
+        bool light = false;
+        float scale = 1.f;
+    };
+
+    bool Create(HWND parent, bool overlay, std::function<void()> onSlotChange) {
+        overlay_ = overlay;
+        onSlotChange_ = std::move(onSlotChange);
+        DWORD ex = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
+        if (overlay) ex |= WS_EX_TOOLWINDOW;
+        hwnd_ = CreateWindowExW(ex, kClass, L"", overlay ? WS_POPUP : (WS_CHILD | WS_CLIPSIBLINGS), 0, 0, 1, 1,
+                                parent, nullptr, ModuleInstance(), this);
+        if (!hwnd_) {
+            Wh_Log(L"Visualizer window creation failed: %u", GetLastError());
+            return false;
+        }
+        surf_.software = true;
+        return true;
+    }
+
+    void Destroy() {
+        g_tap.Configure(TapConfig());
+        if (hwnd_) DestroyWindow(hwnd_);
+        hwnd_ = nullptr;
+    }
+
+    HWND Hwnd() const { return hwnd_; }
+    // Shown, regardless of whether the parent is (IsWindowVisible checks parents too).
+    bool Shown() const { return hwnd_ && (GetWindowLongPtrW(hwnd_, GWL_STYLE) & WS_VISIBLE); }
+
+    void SetContext(const Context& c) {
+        bool accentChanged = c.hasAccent != ctx_.hasAccent || c.accent.r != ctx_.accent.r ||
+                             c.accent.g != ctx_.accent.g || c.accent.b != ctx_.accent.b;
+        ctx_ = c;
+        if (accentChanged) dirty_ = true;
+        Evaluate();
+    }
+
+    void OnSettingsChanged() {
+        dirty_ = true;
+        Evaluate();
+        Render();
+    }
+
+    // Layout presence of the slot (0..1, eased), animated by the widget.
+    float SlotValue() const { return EaseInOutCubic(slotT_.value); }
+    float SlotTarget() const { return slotT_.to; }
+    bool StepSlot() { return slotT_.Step(); }
+
+    // Where the window goes (parent client or screen coordinates), its size,
+    // how much of the slot is open and the widget's own opacity.
+    void Place(int x, int y, int w, int h, float squeeze, float widgetAlpha) {
+        if (!hwnd_) return;
+        bool moved = x != x_ || y != y_;
+        bool changed = w != w_ || h != h_ || std::fabs(squeeze - squeeze_) > 0.001f ||
+                       std::fabs(widgetAlpha - widgetAlpha_) > 0.001f;
+        x_ = x;
+        y_ = y;
+        w_ = w;
+        h_ = h;
+        squeeze_ = squeeze;
+        widgetAlpha_ = widgetAlpha;
+        if (moved && !overlay_)
+            SetWindowPos(hwnd_, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        if (changed || moved) Render();
+    }
+
+    static LRESULT CALLBACK Proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+        Visualizer* self = nullptr;
+        if (msg == WM_NCCREATE) {
+            self = (Visualizer*)((CREATESTRUCTW*)lp)->lpCreateParams;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)self);
+            self->hwnd_ = hwnd;
+        } else {
+            self = (Visualizer*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+        }
+        if (!self) return DefWindowProcW(hwnd, msg, wp, lp);
+        return self->Handle(msg, wp, lp);
+    }
+
+#ifdef TP_HARNESS
+    // Draws the given levels without any audio (test harness only).
+    void DebugSet(const std::vector<float>& levels, const std::vector<float>& wave, float peakBoost,
+                  float slot = 1.f) {
+        cur_ = levels;
+        peak_.assign(levels.size(), 0.f);
+        for (size_t i = 0; i < levels.size(); i++) peak_[i] = std::min(1.f, levels[i] + peakBoost);
+        wave_ = wave;
+        alphaT_.Snap(slot);
+        slotT_.Snap(slot);
+        accentNow_ = TargetColor();
+        accentSet_ = true;
+        dirty_ = true;
+        Render();
+    }
+    const Surface& DebugSurface() const { return surf_; }
+    int DebugX() const { return x_; }
+#endif
+
+   private:
+    using V = Settings::Viz;
+    enum { kTimerDecay = 1 };
+
+    float S(float v) const { return v * ctx_.scale; }
+
+    LRESULT Handle(UINT msg, WPARAM wp, LPARAM lp) {
+        switch (msg) {
+            case WM_NCHITTEST:
+                return HTTRANSPARENT;
+            case WM_MOUSEACTIVATE:
+                return MA_NOACTIVATE;
+            case WM_TP_VIZFRAME:
+                g_tap.framePosted = false;
+                OnFrame(true);
+                return 0;
+            case WM_TIMER:
+                if (wp == kTimerDecay) OnFrame(false);
+                return 0;
+            case WM_NCDESTROY: {
+                HWND h = hwnd_;
+                KillTimer(h, kTimerDecay);
+                surf_.Release();
+                SetWindowLongPtrW(h, GWLP_USERDATA, 0);
+                hwnd_ = nullptr;
+                return DefWindowProcW(h, msg, wp, lp);
+            }
+        }
+        return DefWindowProcW(hwnd_, msg, wp, lp);
+    }
+
+    bool TapActive() const { return ctx_.on && ctx_.gateOpen && GetSettings()->viz.enabled; }
+
+    // Decides what should be visible and tells the audio tap what it needs.
+    void Evaluate() {
+        const V& v = GetSettings()->viz;
+        float slot = 0, alpha = 0;
+        if (ctx_.on && v.enabled) {
+            switch (v.whenSilent) {
+                case V::Silent::Shrink:
+                    slot = alpha = sounding_ ? 1.f : 0.f;
+                    break;
+                case V::Silent::Keep:
+                    slot = 1;
+                    alpha = sounding_ ? 1.f : 0.f;
+                    break;
+                case V::Silent::Rest:
+                    slot = alpha = 1;
+                    break;
+            }
+        }
+        bool anim = GetSettings()->popupAnimations;
+        if (slot != slotT_.to) {
+            slotT_.To(slot, anim ? 280.f : 0.f);
+            if (onSlotChange_) onSlotChange_();
+        }
+        if (alpha != alphaT_.to) {
+            alphaT_.To(alpha, anim ? (alpha > 0 ? 260.f : 320.f) : 0.f);
+            dirty_ = true;
+        }
+        if (!TapActive()) sounding_ = false;
+
+        TapConfig t;
+        t.active = TapActive();
+        t.fast = t.active && (sounding_ || alphaT_.dur > 0 || Moving());
+        t.appOnly = v.appOnly;
+        t.aumid = v.appOnly ? ctx_.aumid : L"";
+        t.bands = v.bars;
+        t.minHz = v.minHz;
+        t.maxHz = v.maxHz;
+        t.fps = v.frameRate;
+        t.wavePoints = std::clamp((int)(S((float)v.width) / 1.5f), 16, 160);
+        t.autoLevel = v.autoLevel;
+        t.sensitivity = v.sensitivity;
+        t.notify = hwnd_;
+        g_tap.Configure(t);
+
+        // Without the tap there are no frames: animate the fall-off locally.
+        if (hwnd_) {
+            if (!t.active && (Moving() || alphaT_.dur > 0)) SetTimer(hwnd_, kTimerDecay, 16, nullptr);
+            else KillTimer(hwnd_, kTimerDecay);
+        }
+    }
+
+    bool Moving() const {
+        for (float c : cur_)
+            if (c > 0.002f) return true;
+        for (float p : peak_)
+            if (p > 0.002f) return true;
+        for (float w : wave_)
+            if (std::fabs(w) > 0.002f) return true;
+        return false;
+    }
+
+    static float TimeConstant(int speed, float slowMs, float fastMs) {
+        float t = (std::clamp(speed, 1, 100) - 1) / 99.f;
+        return slowMs * std::pow(fastMs / slowMs, t);
+    }
+
+    void OnFrame(bool fromTap) {
+        const V& v = GetSettings()->viz;
+        ULONGLONG now = Tick();
+        float dt = std::clamp((now - lastFrame_) / 1000.f, 0.001f, 0.25f);
+        lastFrame_ = now;
+
+        TapFrame f;
+        if (fromTap && TapActive()) g_tap.Read(f);
+        size_t n = (size_t)v.bars;
+        if (f.bands.size() != n) f.bands.assign(n, 0.f);
+        if (cur_.size() != n) cur_.assign(n, 0.f);
+        if (peak_.size() != n) peak_.assign(n, 0.f);
+        if (hold_.size() != n) hold_.assign(n, 0);
+
+        // Sound state.
+        bool was = sounding_;
+        ULONGLONG delay = std::max(150, v.silenceDelayMs);
+        sounding_ = TapActive() && f.capturing && f.lastSound && now - f.lastSound < delay &&
+                    (was || now - f.soundSince >= 350);
+        if (sounding_ != was) Trace(L"Visualizer: sound %s", sounding_ ? L"started" : L"stopped");
+
+        // Smoothing: fast rise, slower fall.
+        float kRise = 1 - std::exp(-dt * 1000 / TimeConstant(v.riseSpeed, 120.f, 4.f));
+        float kFall = 1 - std::exp(-dt * 1000 / TimeConstant(v.fallSpeed, 1200.f, 25.f));
+        bool changed = false;
+        for (size_t i = 0; i < n; i++) {
+            float target = sounding_ || v.whenSilent == V::Silent::Rest ? f.bands[i] : 0.f;
+            if (!fromTap) target = 0;
+            float old = cur_[i];
+            cur_[i] += (target - cur_[i]) * (target > cur_[i] ? kRise : kFall);
+            if (cur_[i] < 0.001f) cur_[i] = 0;
+            if (cur_[i] >= peak_[i]) {
+                peak_[i] = cur_[i];
+                hold_[i] = now + 450;
+            } else if (now > hold_[i]) {
+                peak_[i] = std::max(cur_[i], peak_[i] - 0.9f * dt);
+            }
+            changed |= std::fabs(cur_[i] - old) > 0.0005f;
+        }
+        size_t P = f.wave.size();
+        if (!fromTap || !sounding_) {
+            for (auto& w : wave_) w *= std::exp(-dt / 0.08f);
+        } else {
+            if (wave_.size() != P) wave_.assign(P, 0.f);
+            for (size_t i = 0; i < P; i++) wave_[i] += (f.wave[i] - wave_[i]) * 0.65f;
+        }
+        if (v.style == V::Style::Wave) changed = true;
+
+        Evaluate();
+        bool alphaMoving = alphaT_.Step();
+        changed |= alphaMoving;
+
+        // The accent color follows the cover smoothly.
+        D2D1_COLOR_F target = TargetColor();
+        if (!accentSet_) {
+            accentNow_ = target;
+            accentSet_ = true;
+        } else {
+            float k = 1 - std::exp(-dt / 0.3f);
+            D2D1_COLOR_F a = accentNow_;
+            a.r += (target.r - a.r) * k;
+            a.g += (target.g - a.g) * k;
+            a.b += (target.b - a.b) * k;
+            a.a += (target.a - a.a) * k;
+            if (std::fabs(a.r - accentNow_.r) + std::fabs(a.g - accentNow_.g) + std::fabs(a.b - accentNow_.b) +
+                    std::fabs(a.a - accentNow_.a) >
+                0.001f)
+                changed = true;
+            accentNow_ = a;
+        }
+        if (changed || dirty_) Render();
+    }
+
+    D2D1_COLOR_F TextColor() const { return ctx_.light ? Rgba(0x000000, 0.9f) : Rgba(0xFFFFFF, 1.f); }
+
+    static D2D1_COLOR_F Argb(uint32_t c) { return Rgba(c & 0xFFFFFF, ((c >> 24) & 255) / 255.f); }
+
+    D2D1_COLOR_F TargetColor() const {
+        const V& v = GetSettings()->viz;
+        switch (v.colorMode) {
+            case V::Color::Accent:
+                return ctx_.hasAccent ? WithAlpha(ctx_.accent, 1.f) : TextColor();
+            case V::Color::Custom:
+            case V::Color::Gradient:
+                return Argb(v.color);
+            default:
+                return TextColor();
+        }
+    }
+
+    D2D1_COLOR_F Rainbow(float t) const {
+        D2D1_COLOR_F c = HslToColor(Clamp01(t) * 0.8f, 0.9f, ctx_.light ? 0.45f : 0.62f);
+        return c;
+    }
+
+    // A brush for an element spanning `a` (base) to `b` (tip), or a
+    // horizontal one from x0 to x1 for rainbow lines.
+    ID2D1Brush* Paint(ID2D1RenderTarget* rt, D2D1_POINT_2F base, D2D1_POINT_2F tip, float alpha,
+                      float rainbowT = -1) {
+        const V& v = GetSettings()->viz;
+        if (v.colorMode == V::Color::Rainbow && rainbowT >= 0) {
+            D2D1_COLOR_F c = Rainbow(rainbowT);
+            return surf_.Brush(WithAlpha(c, c.a * alpha));
+        }
+        if (v.colorMode == V::Color::Gradient) {
+            D2D1_COLOR_F c1 = Argb(v.color), c2 = Argb(v.color2);
+            auto* g = Gradient(rt, {{0.f, c1}, {1.f, c2}});
+            if (g) {
+                g->SetStartPoint(base);
+                g->SetEndPoint(tip);
+                g->SetOpacity(alpha);
+                return g;
+            }
+        }
+        D2D1_COLOR_F c = accentNow_;
+        return surf_.Brush(WithAlpha(c, c.a * alpha));
+    }
+
+    ID2D1LinearGradientBrush* Gradient(ID2D1RenderTarget* rt, std::vector<D2D1_GRADIENT_STOP> stops) {
+        std::wstring key;
+        for (auto& s : stops) {
+            wchar_t buf[96];
+            swprintf(buf, 96, L"%.3f:%.3f,%.3f,%.3f,%.3f;", s.position, s.color.r, s.color.g, s.color.b, s.color.a);
+            key += buf;
+        }
+        if (surf_.gen != gradGen_) {
+            grads_.clear();
+            gradGen_ = surf_.gen;
+        }
+        auto it = grads_.find(key);
+        if (it != grads_.end()) return it->second.get();
+        com_ptr<ID2D1GradientStopCollection> coll;
+        if (FAILED(rt->CreateGradientStopCollection(stops.data(), (UINT32)stops.size(), coll.put()))) return nullptr;
+        com_ptr<ID2D1LinearGradientBrush> brush;
+        if (FAILED(rt->CreateLinearGradientBrush(D2D1::LinearGradientBrushProperties({0, 0}, {0, 1}), coll.get(),
+                                                 brush.put())))
+            return nullptr;
+        if (grads_.size() > 8) grads_.clear();
+        grads_[key] = brush;
+        return brush.get();
+    }
+
+    ID2D1LinearGradientBrush* RainbowLine(ID2D1RenderTarget* rt, float x0, float x1, float alpha) {
+        std::vector<D2D1_GRADIENT_STOP> stops;
+        for (int i = 0; i <= 6; i++) stops.push_back({i / 6.f, Rainbow(i / 6.f)});
+        auto* g = Gradient(rt, stops);
+        if (g) {
+            g->SetStartPoint({x0, 0});
+            g->SetEndPoint({x1, 0});
+            g->SetOpacity(alpha);
+        }
+        return g;
+    }
+
+    void Render() {
+        dirty_ = false;
+        if (!hwnd_ || !g_gfx) return;
+        float alpha = alphaT_.value * widgetAlpha_ * GetSettings()->viz.opacity / 100.f;
+        bool show = alpha > 0.003f && squeeze_ > 0.01f && w_ > 1;
+        if (!show) {
+            if (Shown()) ShowWindow(hwnd_, SW_HIDE);
+            return;
+        }
+#ifdef TP_HARNESS
+        uint64_t t0 = DbgNowUs();
+#endif
+        if (!surf_.Resize(std::max(1, w_), std::max(1, h_))) return;
+        ID2D1RenderTarget* rt = surf_.Begin();
+        if (!rt) return;
+        float W = (float)w_, H = (float)h_;
+        // Squeeze horizontally around the center while the slot opens/closes.
+        rt->SetTransform(D2D1::Matrix3x2F::Scale(squeeze_, 1.f, D2D1::Point2F(W / 2, H / 2)));
+        Draw(rt, W, H, alpha);
+        rt->SetTransform(D2D1::Matrix3x2F::Identity());
+        if (!surf_.End()) return;
+#ifdef TP_HARNESS
+        uint64_t t1 = DbgNowUs();
+        g_dbgDrawUs += t1 - t0;
+#endif
+        POINT pos{x_, y_};
+        surf_.Present(hwnd_, overlay_ ? &pos : nullptr, 255);
+#ifdef TP_HARNESS
+        g_dbgPresentUs += DbgNowUs() - t1;
+#endif
+        if (!Shown()) {
+            ShowWindow(hwnd_, SW_SHOWNA);
+            if (!overlay_) SetWindowPos(hwnd_, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+    }
+
+    void Draw(ID2D1RenderTarget* rt, float W, float H, float alpha) {
+        const V& v = GetSettings()->viz;
+        float bw = std::min(S((float)v.width), W), bh = std::min(S((float)v.height), H - S(4));
+        D2D1_RECT_F box = RectXYWH(std::round((W - bw) / 2), std::round((H - bh) / 2), bw, bh);
+        int n = (int)cur_.size();
+        if (n <= 0) return;
+        auto level = [&](int i) { return cur_[v.mirror ? n - 1 - i : i]; };
+        auto peakOf = [&](int i) { return peak_[v.mirror ? n - 1 - i : i]; };
+        float gap = S((float)v.gap);
+        float barW = (bw - gap * (n - 1)) / n;
+        if (barW < 1) {
+            gap = std::max(0.f, (bw - n) / std::max(1, n - 1));
+            barW = std::max(0.5f, (bw - gap * (n - 1)) / n);
+        }
+        float round = v.roundness / 100.f;
+        float minH = std::max(S(2), std::min(barW, bh * 0.2f));
+        bool peaks = v.peaks;
+        float capH = std::max(S(1.5f), std::min(barW * 0.45f, S(3)));
+        auto rr = [&](D2D1_RECT_F r) {
+            float rad = std::min(Width(r), Height(r)) / 2 * round;
+            return D2D1::RoundedRect(r, rad, rad);
+        };
+
+        switch (v.style) {
+            case V::Style::Bars:
+            case V::Style::Mirrored: {
+                bool mir = v.style == V::Style::Mirrored;
+                float mid = (box.top + box.bottom) / 2;
+                for (int i = 0; i < n; i++) {
+                    float x = box.left + i * (barW + gap);
+                    float h = minH + level(i) * (bh - minH);
+                    float t = n > 1 ? (float)i / (n - 1) : 0.f;
+                    D2D1_RECT_F r = mir ? RectF(x, mid - h / 2, x + barW, mid + h / 2)
+                                        : RectF(x, box.bottom - h, x + barW, box.bottom);
+                    D2D1_POINT_2F base = mir ? D2D1::Point2F(x, mid) : D2D1::Point2F(x, box.bottom);
+                    D2D1_POINT_2F tip = D2D1::Point2F(x, box.top);
+                    if (mir) {
+                        // Gradient from the center outwards: draw both halves.
+                        D2D1_RECT_F top = RectF(r.left, r.top, r.right, mid + 0.5f);
+                        D2D1_RECT_F bottom = RectF(r.left, mid - 0.5f, r.right, r.bottom);
+                        if (GetSettings()->viz.colorMode == V::Color::Gradient) {
+                            rt->PushAxisAlignedClip(top, D2D1_ANTIALIAS_MODE_ALIASED);
+                            rt->FillRoundedRectangle(rr(r), Paint(rt, base, D2D1::Point2F(x, box.top), alpha, t));
+                            rt->PopAxisAlignedClip();
+                            rt->PushAxisAlignedClip(bottom, D2D1_ANTIALIAS_MODE_ALIASED);
+                            rt->FillRoundedRectangle(rr(r), Paint(rt, base, D2D1::Point2F(x, box.bottom), alpha, t));
+                            rt->PopAxisAlignedClip();
+                        } else {
+                            rt->FillRoundedRectangle(rr(r), Paint(rt, base, tip, alpha, t));
+                        }
+                    } else {
+                        rt->FillRoundedRectangle(rr(r), Paint(rt, base, tip, alpha, t));
+                    }
+                    if (peaks) {
+                        float ph = minH + peakOf(i) * (bh - minH);
+                        if (ph > h + capH * 0.5f) {
+                            if (mir) {
+                                float y = std::max(box.top, mid - ph / 2 - capH - S(1));
+                                rt->FillRoundedRectangle(rr(RectF(x, y, x + barW, y + capH)),
+                                                         Paint(rt, base, tip, alpha * 0.85f, t));
+                                float y2 = std::min(box.bottom - capH, mid + ph / 2 + S(1));
+                                rt->FillRoundedRectangle(rr(RectF(x, y2, x + barW, y2 + capH)),
+                                                         Paint(rt, base, tip, alpha * 0.85f, t));
+                            } else {
+                                float y = std::max(box.top, box.bottom - ph - capH - S(1));
+                                rt->FillRoundedRectangle(rr(RectF(x, y, x + barW, y + capH)),
+                                                         Paint(rt, base, tip, alpha * 0.85f, t));
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+            case V::Style::Dots: {
+                float d = barW;
+                int rows = std::max(1, (int)std::floor((bh + gap) / (d + gap)));
+                float used = rows * d + (rows - 1) * gap;
+                float top = box.top + (bh - used) / 2;
+                for (int i = 0; i < n; i++) {
+                    float x = box.left + i * (barW + gap);
+                    float lit = level(i) * rows;
+                    int peakRow = (int)std::ceil(peakOf(i) * rows) - 1;
+                    float t = n > 1 ? (float)i / (n - 1) : 0.f;
+                    for (int r = 0; r < rows; r++) {
+                        float y = top + used - (r + 1) * d - r * gap;
+                        D2D1_RECT_F dot = RectXYWH(x, y, d, d);
+                        float on = Clamp01(lit - r);
+                        if (r == 0) on = std::max(on, 1.f);  // the bottom dot is always lit
+                        if (peaks && r == peakRow && r > 0) on = std::max(on, 0.85f);
+                        float a = alpha * (0.14f + 0.86f * on);
+                        rt->FillRoundedRectangle(rr(dot), Paint(rt, D2D1::Point2F(x, box.bottom),
+                                                                D2D1::Point2F(x, box.top), a, t));
+                    }
+                }
+                break;
+            }
+            case V::Style::Line: {
+                std::vector<D2D1_POINT_2F> pts(n);
+                float stroke = std::max(S(1.5f), 1.f);
+                float top = box.top + stroke / 2, bottom = box.bottom - stroke / 2;
+                for (int i = 0; i < n; i++) {
+                    float x = n > 1 ? box.left + bw * i / (n - 1) : box.left + bw / 2;
+                    pts[i] = D2D1::Point2F(x, bottom - level(i) * (bottom - top));
+                }
+                auto clampY = [&](float y) { return std::clamp(y, top, bottom); };
+                auto build = [&](bool closed) {
+                    com_ptr<ID2D1PathGeometry> geo;
+                    if (FAILED(g_gfx->D2D()->CreatePathGeometry(geo.put()))) return geo;
+                    com_ptr<ID2D1GeometrySink> sink;
+                    geo->Open(sink.put());
+                    sink->BeginFigure(closed ? D2D1::Point2F(pts[0].x, box.bottom) : pts[0],
+                                      closed ? D2D1_FIGURE_BEGIN_FILLED : D2D1_FIGURE_BEGIN_HOLLOW);
+                    if (closed) sink->AddLine(pts[0]);
+                    for (int i = 0; i + 1 < n; i++) {
+                        D2D1_POINT_2F p0 = pts[std::max(0, i - 1)], p1 = pts[i], p2 = pts[i + 1],
+                                      p3 = pts[std::min(n - 1, i + 2)];
+                        D2D1_POINT_2F c1{p1.x + (p2.x - p0.x) / 6, clampY(p1.y + (p2.y - p0.y) / 6)};
+                        D2D1_POINT_2F c2{p2.x - (p3.x - p1.x) / 6, clampY(p2.y - (p3.y - p1.y) / 6)};
+                        sink->AddBezier(D2D1::BezierSegment(c1, c2, p2));
+                    }
+                    if (closed) sink->AddLine(D2D1::Point2F(pts[n - 1].x, box.bottom));
+                    sink->EndFigure(closed ? D2D1_FIGURE_END_CLOSED : D2D1_FIGURE_END_OPEN);
+                    sink->Close();
+                    return geo;
+                };
+                auto fill = build(true), line = build(false);
+                bool rainbow = v.colorMode == V::Color::Rainbow;
+                if (fill) {
+                    ID2D1Brush* b = nullptr;
+                    if (rainbow) {
+                        b = RainbowLine(rt, box.left, box.right, alpha * 0.3f);
+                    } else if (v.colorMode == V::Color::Gradient) {
+                        b = Paint(rt, D2D1::Point2F(0, box.bottom), D2D1::Point2F(0, box.top), alpha * 0.32f);
+                    } else {
+                        // A solid color fades out towards the bottom.
+                        D2D1_COLOR_F c = accentNow_;
+                        auto* g = Gradient(rt, {{0.f, WithAlpha(c, c.a * 0.5f)}, {1.f, WithAlpha(c, c.a * 0.04f)}});
+                        if (g) {
+                            g->SetStartPoint(D2D1::Point2F(0, box.top));
+                            g->SetEndPoint(D2D1::Point2F(0, box.bottom));
+                            g->SetOpacity(alpha);
+                        }
+                        b = g;
+                    }
+                    if (b) rt->FillGeometry(fill.get(), b);
+                }
+                if (line) {
+                    ID2D1Brush* b = rainbow ? (ID2D1Brush*)RainbowLine(rt, box.left, box.right, alpha)
+                                            : Paint(rt, D2D1::Point2F(0, box.bottom), D2D1::Point2F(0, box.top), alpha);
+                    if (b) rt->DrawGeometry(line.get(), b, stroke, g_gfx->RoundStroke());
+                }
+                break;
+            }
+            case V::Style::Wave: {
+                int P = (int)wave_.size();
+                float stroke = std::max(S(1.5f), 1.f);
+                float mid = (box.top + box.bottom) / 2, amp = bh / 2 - stroke / 2;
+                com_ptr<ID2D1PathGeometry> geo;
+                if (FAILED(g_gfx->D2D()->CreatePathGeometry(geo.put()))) break;
+                com_ptr<ID2D1GeometrySink> sink;
+                geo->Open(sink.put());
+                for (int i = 0; i < std::max(P, 2); i++) {
+                    float x = box.left + bw * i / std::max(1, std::max(P, 2) - 1);
+                    float w = P ? wave_[v.mirror ? P - 1 - i : i] : 0.f;
+                    D2D1_POINT_2F p = D2D1::Point2F(x, mid - w * amp);
+                    if (i == 0) sink->BeginFigure(p, D2D1_FIGURE_BEGIN_HOLLOW);
+                    else sink->AddLine(p);
+                }
+                sink->EndFigure(D2D1_FIGURE_END_OPEN);
+                sink->Close();
+                ID2D1Brush* b = v.colorMode == V::Color::Rainbow
+                                    ? (ID2D1Brush*)RainbowLine(rt, box.left, box.right, alpha)
+                                : v.colorMode == V::Color::Gradient
+                                    ? Paint(rt, D2D1::Point2F(box.left, 0), D2D1::Point2F(box.right, 0), alpha)
+                                    : Paint(rt, {}, {}, alpha);
+                if (b) rt->DrawGeometry(geo.get(), b, stroke, g_gfx->RoundStroke());
+                break;
+            }
+        }
+    }
+
+    HWND hwnd_ = nullptr;
+    bool overlay_ = false;
+    std::function<void()> onSlotChange_;
+    Context ctx_;
+    Surface surf_;
+    int x_ = INT_MIN, y_ = INT_MIN, w_ = 0, h_ = 0;
+    float squeeze_ = 0, widgetAlpha_ = 0;
+    Tween slotT_, alphaT_;
+    bool sounding_ = false, dirty_ = true;
+    ULONGLONG lastFrame_ = 0;
+    std::vector<float> cur_, peak_, wave_;
+    std::vector<ULONGLONG> hold_;
+    D2D1_COLOR_F accentNow_{1, 1, 1, 1};
+    bool accentSet_ = false;
+    std::map<std::wstring, com_ptr<ID2D1LinearGradientBrush>> grads_;
+    uint32_t gradGen_ = ~0u;
+};
+
+}  // namespace tp
+
+namespace tp {
+
+// ============================================================================
 // UI state: latest snapshot + optimistic overrides (UI thread only)
 // ============================================================================
 
@@ -4583,6 +6482,10 @@ static void UiPrev() {
     if (e && e->canPrev) SendAct(Act::Prev);
 }
 
+#ifdef TP_HARNESS
+static float g_testScale = 0;  // overrides the DPI scale of the widget (renders at 150%)
+#endif
+
 // Implemented by the popup.
 static void PopupToggle(const RECT& anchor);
 static void PopupOnSnapshot();
@@ -4625,12 +6528,16 @@ class Widget {
             SendMessageW(tooltip_, TTM_SETMAXTIPWIDTH, 0, 600);
             ApplyTooltipTheme();
         }
+        // The visualizer sits on top of the widget: a sibling child of the
+        // taskbar, or (compatibility mode) a popup owned by the widget.
+        viz_.Create(overlay_ ? hwnd_ : taskbar, overlay_, [this] { StartAnimation(); });
         SetTimer(hwnd_, kTimerHousekeeping, 2000, nullptr);
         Relayout();
         return true;
     }
 
     void Destroy() {
+        viz_.Destroy();
         if (hwnd_) DestroyWindow(hwnd_);
         hwnd_ = nullptr;
         tooltip_ = nullptr;
@@ -4651,6 +6558,31 @@ class Widget {
     }
 
     void OnSnapshot() {
+        UpdateShown();
+        SyncViz();
+    }
+
+    // Tells the visualizer what the widget shows and whether it may react.
+    void SyncViz() {
+        if (!viz_.Hwnd()) return;
+        const Snapshot* e = g_ui.Eff();
+        const auto& v = GetSettings()->viz;
+        Visualizer::Context c;
+        c.on = v.enabled && visible_ && e && e->visible && !e->connectPrompt && !shown_.connect;
+        // Music on another Spotify Connect device makes no sound here.
+        bool local = e && (e->src == Src::Session ||
+                           (e->src == Src::Spotify && (e->deviceName.empty() || g_localSpotifyPlaying ||
+                                                       IEquals(e->deviceName, ThisComputerName()))));
+        c.gateOpen = !v.onlyWhenPlaying || (e && e->playing && local);
+        if (e) c.aumid = e->src == Src::Spotify ? std::wstring(L"Spotify.exe") : e->aumid;
+        c.hasAccent = e && e->art;
+        if (c.hasAccent) c.accent = e->art->accent;
+        c.light = light_;
+        c.scale = scale_;
+        viz_.SetContext(c);
+    }
+
+    void UpdateShown() {
         const Snapshot* e = g_ui.Eff();
         bool want = e && e->visible;
         if (want && winAlpha_ < 0.02f) playT_.Snap(e->playing ? 0.f : 1.f);  // no morph when appearing
@@ -4711,6 +6643,9 @@ class Widget {
         if (!hwnd_ || !taskbar_) return;
         UINT dpi = GetDpiForWindow(taskbar_);
         scale_ = (dpi ? dpi : 96) / 96.f;
+#ifdef TP_HARNESS
+        if (g_testScale > 0) scale_ = g_testScale;
+#endif
         g_uiScaleMilli = (int)std::lround(scale_ * 1000);
         RECT rc{};
         GetClientRect(taskbar_, &rc);
@@ -4718,6 +6653,7 @@ class Widget {
         tbClientWidth_ = rc.right - rc.left;
         widthTarget_ = ContentWidth(shown_);
         if (!widthAnim_) width_ = widthTarget_;
+        SyncViz();
         Reposition();
         Render();
         PopupRelayout();
@@ -4726,6 +6662,8 @@ class Widget {
     void OnSettingsChanged() {
         light_ = IsLightTaskbar();
         ApplyTooltipTheme();
+        SyncViz();
+        viz_.OnSettingsChanged();
         Relayout();
     }
 
@@ -4741,9 +6679,27 @@ class Widget {
         widthAnim_ = false;
         width_ = widthTarget_ = ContentWidth(shown_);
         hover_ = hover;
+        volT_.Snap(volT_.to);
         Render();
     }
     const Surface& DebugSurface() const { return surf_; }
+    Visualizer& DebugViz() { return viz_; }
+    // Where the visualizer window sits relative to the widget.
+    int DebugVizOffset() const { return viz_.DebugX() - (int)std::lround(LeftPx()); }
+    // A frozen frame of the volume indicator: how far it rolled in, where the
+    // bar is (-1: at the level) and how much of the bump is left.
+    void DebugVolume(int level, bool muted, const std::wstring& message, float shown, float fill = -1,
+                     float bump = 0) {
+        volLevel_ = level;
+        volMuted_ = muted;
+        volMessage_ = message;
+        volT_.Snap(shown);
+        volFillT_.Snap(fill >= 0 ? fill : (float)std::max(0, level));
+        volBumpT_.Snap(bump);
+        volPctW_.Snap(level >= 0 ? TextWidth(VolumeText(level), ArtistFont()) : 0.f);
+    }
+    std::pair<float, float> DebugVolumeFill() const { return {volFillT_.from, volFillT_.to}; }
+    void DebugWheel(int delta, WORD keys) { OnWheel(delta, keys); }
 #endif
 
     static LRESULT CALLBACK Proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -4760,7 +6716,8 @@ class Widget {
     }
 
    private:
-    enum { kTimerAnim = 1, kTimerHousekeeping = 2 };
+    enum { kTimerAnim = 1, kTimerHousekeeping = 2, kTimerVolumeSend = 3, kTimerVolumeHide = 4 };
+    using VizPos = Settings::Viz::Pos;
     enum Part { kNone = -1, kInfo = 0, kPrev = 1, kPlay = 2, kNext = 3 };
     enum class Phase { Idle, FadeOut, FadeIn };
 
@@ -4799,10 +6756,42 @@ class Widget {
     IDWriteTextFormat* ArtistFont() const { return g_gfx->Font(false, S(11.5f), DWRITE_FONT_WEIGHT_NORMAL); }
     float LeftPx() const { return S((float)GetSettings()->leftMargin); }
 
+    // The visualizer's slot: its full width, and how much of it is open now
+    // (it grows and shrinks when sound starts and stops).
+    bool VizOn(const Content& c) const { return GetSettings()->viz.enabled && !c.connect && viz_.Hwnd(); }
+    float SlotFull(const Content& c) const {
+        return VizOn(c) ? std::round(S((float)GetSettings()->viz.width + 8)) : 0.f;
+    }
+    float SlotNow() const { return SlotFull(shown_) * viz_.SlotValue(); }
+    VizPos SlotPos() const { return GetSettings()->viz.position; }
+    // Full widget width: the content plus the open part of the slot.
+    float TotalW() const { return std::ceil(width_ + SlotNow()); }
+
+    float ButtonsLeft(float W) const {
+        return W - PadRight() - 3 * Btn() - (SlotPos() == VizPos::AfterControls ? SlotNow() : 0);
+    }
+    float CoverLeft() const { return Pad() + (SlotPos() == VizPos::BeforeCover ? SlotNow() : 0); }
+    // The slot's left and right edge in widget coordinates.
+    std::pair<float, float> SlotRange(const Content& c, float W) const {
+        float s = SlotNow();
+        if (SlotPos() == VizPos::BeforeCover) return {Pad() - S(4), Pad() - S(4) + s};
+        if (!Controls(c)) return {W - s, W};
+        float bl = ButtonsLeft(W);
+        if (SlotPos() == VizPos::AfterControls) return {bl + 3 * Btn(), bl + 3 * Btn() + s};
+        return {bl - s, bl};
+    }
+    // Where the title and artist must end.
+    float TextRight(const Content& c, float W) const {
+        float right = InfoRect(c, W).right - GapText();
+        if (SlotPos() == VizPos::BeforeControls || (!Controls(c) && SlotPos() == VizPos::AfterControls))
+            right -= SlotNow();
+        return right;
+    }
+
     float TextW(const Content& c) const {
         float tw = std::max(TextWidth(c.title, TitleFont()), TextWidth(c.artist, ArtistFont()));
         tw = std::min(tw, S((float)GetSettings()->maxTextWidth));
-        float fixed = FixedW(c);
+        float fixed = FixedW(c) + SlotFull(c);
         int start = g_startButtonLeft;
         float left = LeftPx();
         // Never run into the centered taskbar icons.
@@ -4839,17 +6828,17 @@ class Widget {
     }
 
     D2D1_RECT_F InfoRect(const Content& c, float W) const {
-        float right = Controls(c) ? W - PadRight() - 3 * Btn() : W;
+        float right = Controls(c) ? ButtonsLeft(W) : W;
         float hh = HoverH();
         return RectF(0, (heightPx_ - hh) / 2, std::max(right, 1.f), (heightPx_ + hh) / 2);
     }
     D2D1_RECT_F ButtonRect(int i, float W) const {
-        float x0 = W - PadRight() - 3 * Btn() + i * Btn();
+        float x0 = ButtonsLeft(W) + i * Btn();
         return RectF(x0, 0, x0 + Btn(), (float)heightPx_);
     }
 
     int HitTest(float x, float y) const {
-        float W = std::ceil(width_);
+        float W = TotalW();
         if (x < 0 || y < 0 || x >= W || y >= heightPx_) return kNone;
         if (Controls(shown_)) {
             for (int i = 0; i < 3; i++)
@@ -4874,16 +6863,38 @@ class Widget {
             TTTOOLINFOW ti{sizeof(ti)};
             ti.hwnd = hwnd_;
             ti.uId = 1;
-            D2D1_RECT_F r = InfoRect(shown_, std::ceil(width_));
+            D2D1_RECT_F r = InfoRect(shown_, TotalW());
             ti.rect = RECT{(LONG)r.left, 0, (LONG)r.right, heightPx_};
             SendMessageW(tooltip_, TTM_NEWTOOLRECTW, 0, (LPARAM)&ti);
         }
     }
 
+    // Keeps the widget (and the visualizer just above it) over the taskbar's
+    // own content.
     void EnsureOnTop() {
         if (overlay_ || !hwnd_) return;
-        if (GetWindow(taskbar_, GW_CHILD) != hwnd_)
-            SetWindowPos(hwnd_, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        const UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+        HWND viz = viz_.Hwnd();
+        bool vizShown = viz_.Shown();
+        HWND top = GetWindow(taskbar_, GW_CHILD);
+        if (top != hwnd_ && !(vizShown && top == viz && GetWindow(viz, GW_HWNDNEXT) == hwnd_)) {
+            SetWindowPos(hwnd_, HWND_TOP, 0, 0, 0, 0, flags);
+            top = hwnd_;
+        }
+        if (vizShown && top == hwnd_) SetWindowPos(viz, HWND_TOP, 0, 0, 0, 0, flags);
+    }
+
+    // Moves the visualizer window to its slot.
+    void PlaceViz(float W) {
+        if (!viz_.Hwnd()) return;
+        float full = SlotFull(shown_);
+        auto [x0, x1] = SlotRange(shown_, W);
+        int winW = std::max(1, (int)std::ceil(full));
+        int left = (int)std::lround((x0 + x1) / 2 - winW / 2.f);
+        POINT origin = overlay_ ? screenPos_ : POINT{(LONG)std::lround(LeftPx()), 0};
+        float squeeze = full > 0 ? Clamp01((x1 - x0) / full) : 0.f;
+        float alpha = visible_ || winAnim_ ? Clamp01(winAlpha_) : 0.f;
+        viz_.Place(origin.x + left, origin.y, winW, heightPx_, squeeze, alpha);
     }
 
     void ApplyTooltipTheme() {
@@ -4958,6 +6969,17 @@ class Widget {
         }
         if (hlT_.Step()) active = true;
         if (playT_.Step()) active = true;
+        if (volT_.Step()) active = true;
+        if (volFillT_.Step()) active = true;
+        if (volBumpT_.Step()) active = true;
+        if (volPctW_.Step()) active = true;
+        if (viz_.StepSlot()) {
+            active = true;
+            slotAnim_ = true;
+        } else if (slotAnim_) {
+            slotAnim_ = false;
+            Reposition();  // the tooltip area follows the final width
+        }
         if (winAlpha_ > 0 || winAnim_) Render();
         if (!active) {
             KillTimer(hwnd_, kTimerAnim);
@@ -4967,7 +6989,7 @@ class Widget {
 
     void Render() {
         if (!hwnd_ || !g_gfx) return;
-        int W = std::max(1, (int)std::ceil(width_));
+        int W = std::max(1, (int)TotalW());
         int H = std::max(1, heightPx_);
         if (!surf_.Resize(W, H)) return;
         ID2D1RenderTarget* rt = surf_.Begin();
@@ -4979,6 +7001,7 @@ class Widget {
         }
         BYTE alpha = (BYTE)std::lround(Clamp01(winAlpha_) * 255);
         surf_.Present(hwnd_, overlay_ ? &screenPos_ : nullptr, alpha);
+        PlaceViz((float)W);
     }
 
     void InvalidateLater() { PostMessageW(hwnd_, WM_TP_RELAYOUT, 0, 0); }
@@ -5010,7 +7033,7 @@ class Widget {
 
         float ca = contentAlpha_;
         float cs = CoverSize();
-        D2D1_RECT_F cover = RectXYWH(Pad(), std::round((heightPx_ - cs) / 2), cs, cs);
+        D2D1_RECT_F cover = RectXYWH(CoverLeft(), std::round((heightPx_ - cs) / 2), cs, cs);
         float coverRadius = S(5);
         if (c.connect) {
             DrawSpotifyLogo(surf_, rt, Center(cover), cs * 0.78f, ca);
@@ -5029,20 +7052,34 @@ class Widget {
         }
 
         float tw = TextW(c);
+        // While scrolling, the artist line (or a lone title) rolls up and out
+        // and the volume rolls in from below (and back when it hides).
+        float vi = Clamp01(volT_.value);
         if (tw > 0) {
             float x = cover.right + GapCover();
-            float maxRight = InfoRect(c, W).right - GapText();
+            float maxRight = TextRight(c, W);
             float w = std::max(0.f, std::min(tw, maxRight - x));
             float mid = heightPx_ / 2.f;
-            if (!c.artist.empty()) {
+            bool artist = !c.artist.empty();
+            if (artist)
                 DrawTextLine(rt, c.title, TitleFont(), RectF(x, mid - S(17), x + w, mid + S(0.5f)),
                              surf_.Brush(WithAlpha(fg, fg.a * ca)));
-                DrawTextLine(rt, c.artist, ArtistFont(), RectF(x, mid - S(0.5f), x + w, mid + S(16)),
-                             surf_.Brush(WithAlpha(fg2, fg2.a * ca)));
-            } else {
-                DrawTextLine(rt, c.title, TitleFont(), RectF(x, mid - S(10), x + w, mid + S(10)),
-                             surf_.Brush(WithAlpha(fg, fg.a * ca)));
+            D2D1_RECT_F line = artist ? RectF(x, mid - S(0.5f), x + w, mid + S(16)) : RectF(x, mid - S(10), x + w, mid + S(10));
+            float roll = Height(line) * 0.55f;
+            bool rolling = vi > 0.01f && vi < 0.99f;
+            if (rolling) rt->PushAxisAlignedClip(line, D2D1_ANTIALIAS_MODE_ALIASED);
+            if (vi < 0.99f) {
+                D2D1_RECT_F out = RectF(line.left, line.top - roll * vi, line.right, line.bottom - roll * vi);
+                if (artist)
+                    DrawTextLine(rt, c.artist, ArtistFont(), out, surf_.Brush(WithAlpha(fg2, fg2.a * ca * (1 - vi))));
+                else
+                    DrawTextLine(rt, c.title, TitleFont(), out, surf_.Brush(WithAlpha(fg, fg.a * ca * (1 - vi))));
             }
+            if (vi > 0.01f) {
+                float d = roll * (1 - vi);
+                DrawVolume(rt, RectF(line.left, line.top + d, line.right, line.bottom + d), vi, fg, fg2);
+            }
+            if (rolling) rt->PopAxisAlignedClip();
         }
 
         if (Controls(c)) {
@@ -5059,6 +7096,131 @@ class Widget {
             if (m > 0.001f)
                 DrawTransport(rt, Transport::Play, pc, S(14) * (0.65f + 0.35f * m), surf_.Brush(WithAlpha(pcol, pcol.a * m)));
         }
+    }
+
+    static std::wstring VolumeText(int level) { return level < 0 ? L"--" : std::to_wstring(level) + L"%"; }
+
+    // A speaker icon, a small bar and the percentage (or a short message).
+    void DrawVolume(ID2D1RenderTarget* rt, D2D1_RECT_F r, float a, D2D1_COLOR_F fg, D2D1_COLOR_F fg2) {
+        if (!volMessage_.empty()) {
+            DrawTextLine(rt, volMessage_, ArtistFont(), r, surf_.Brush(WithAlpha(fg2, fg2.a * a)));
+            return;
+        }
+        float cy = std::round((r.top + r.bottom) / 2);
+        // The bar and the number follow the level smoothly; each step gives
+        // the bar and the speaker a short bump.
+        float level = Clamp01(volFillT_.value / 100.f);
+        int v = (int)std::lround(level * 100);
+        float bump = Clamp01(volBumpT_.value);
+        Glyph g = volMuted_ ? Glyph::Mute
+                  : v == 0  ? Glyph::Volume0
+                  : v < 34  ? Glyph::Volume1
+                  : v < 67  ? Glyph::Volume2
+                            : Glyph::Volume3;
+        float iconW = S(15);
+        DrawIcon(rt, g, D2D1::Point2F(r.left + iconW / 2, cy), S(12) * (1 + 0.14f * bump),
+                 surf_.Brush(WithAlpha(fg, fg.a * a)));
+        std::wstring pct = VolumeText(volLevel_ < 0 ? -1 : v);
+        // The number sits right after the bar; the bar takes the rest. When
+        // the number gets a digit more or less, the bar's end slides.
+        float pctW = volPctW_.value > 0 ? volPctW_.value : TextWidth(pct, ArtistFont());
+        float gap = S(8);  // room for the knob
+        float barL = r.left + iconW + S(6), barR = r.right - pctW - gap;
+        if (barR - barL >= S(8)) {
+            // Like the popup's slider while it's used: thicker, in the cover's
+            // accent color, with a knob. Each step makes it pop, then it
+            // settles back to white.
+            float bh = S(4) + S(2) * bump;
+            float dim = volMuted_ ? 0.4f : 1.f;
+            D2D1_RECT_F track = RectF(barL, cy - bh / 2, barR, cy + bh / 2);
+            rt->FillRoundedRectangle(D2D1::RoundedRect(track, bh / 2, bh / 2), surf_.Brush(WithAlpha(fg, 0.22f * a)));
+            D2D1_COLOR_F fillCol = fg;
+            if (!light_ && shown_.art) {
+                D2D1_COLOR_F ac = shown_.art->accent;
+                float t = 0.25f + 0.75f * bump;
+                fillCol = D2D1_COLOR_F{fg.r + (ac.r - fg.r) * t, fg.g + (ac.g - fg.g) * t, fg.b + (ac.b - fg.b) * t, fg.a};
+            }
+            float fill = barL + (barR - barL) * level;
+            if (level > 0.001f)
+                rt->FillRoundedRectangle(
+                    D2D1::RoundedRect(RectF(barL, cy - bh / 2, std::max(fill, barL + bh), cy + bh / 2), bh / 2, bh / 2),
+                    surf_.Brush(WithAlpha(fillCol, fillCol.a * a * dim)));
+            float kr = S(3.5f) + S(2.5f) * bump;
+            rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(fill, cy), kr, kr), surf_.Brush(WithAlpha(fg, fg.a * a * dim)));
+            DrawTextLine(rt, pct, ArtistFont(), RectF(barR + gap, r.top, r.right, r.bottom),
+                         surf_.Brush(WithAlpha(fg2, fg2.a * a)));
+        } else {
+            DrawTextLine(rt, pct, ArtistFont(), RectF(r.left + iconW + S(3), r.top, r.right, r.bottom),
+                         surf_.Brush(WithAlpha(fg2, fg2.a * a)));
+        }
+    }
+
+    // ---- Scroll to change the volume ----
+
+    void OnWheel(int delta, WORD keys) {
+        auto set = GetSettings();
+        const Snapshot* e = g_ui.Eff();
+        if (!set->scroll.enabled || !visible_ || !e || !e->visible || shown_.connect) return;
+        if (Tick() - wheelTick_ > 500) wheelAcc_ = 0;
+        wheelTick_ = Tick();
+        int step = (keys & MK_SHIFT) ? 1 : set->scroll.step;
+        int change = WheelSteps(wheelAcc_, set->scroll.invert ? -delta : delta, step);
+        if (!change) return;
+        if (!set->scroll.system && e->src == Src::Spotify) {
+            // Spotify's own volume (also works for phones and speakers).
+            if (!e->canVolume) {
+                // Some devices (e.g. phones) don't allow it.
+                ShowVolume(-1, false, L"Volume locked");
+                return;
+            }
+            int old = std::clamp(e->volume, 0, 100);
+            int v = std::clamp(old + change, 0, 100);
+            SetSpotifyVolume(v);  // (refreshes the snapshot: `e` is stale after this)
+            ShowVolume(v, false, L"", old);
+            return;
+        }
+        bool system = set->scroll.system || e->src != Src::Session || e->aumid.empty();
+        g_mixer.Nudge(system, system ? L"" : e->aumid, change, hwnd_);
+    }
+
+    // Sends Spotify volume changes at most about four times a second.
+    void SetSpotifyVolume(int v) {
+        g_ui.OverrideVolume(v);
+        PopupOnSnapshot();
+        pendingSpotifyVolume_ = v;
+        if (Tick() - lastSpotifyVolumeSend_ >= 250) {
+            SendAct(Act::Volume, v);
+            lastSpotifyVolumeSend_ = Tick();
+            pendingSpotifyVolume_ = -1;
+        } else {
+            SetTimer(hwnd_, kTimerVolumeSend, 260, nullptr);
+        }
+    }
+
+    // `from` is the level before this change (-1 if unknown): the bar then
+    // slides from there even when it just appeared.
+    void ShowVolume(int level, bool muted, std::wstring message, int from = -1) {
+        if (!GetSettings()->scroll.indicator) return;
+        bool anim = GetSettings()->popupAnimations;
+        bool barUp = volT_.to > 0.5f && volMessage_.empty() && volLevel_ >= 0;
+        if (level >= 0) {
+            if (!barUp) volFillT_.Snap((float)(from >= 0 ? from : level));
+            // Every notch pops the bar; a smaller pop when it's already at 0 or 100.
+            bool changed = barUp ? level != volLevel_ : from >= 0 && from != level;
+            volBumpT_.Snap(changed ? 1.f : std::max(volBumpT_.value, 0.5f));
+            volBumpT_.To(0.f, anim ? 420.f : 0.f);
+            volFillT_.To((float)level, anim ? 260.f : 0.f, Ease::OutQuint);
+            float pw = TextWidth(VolumeText(level), ArtistFont());
+            if (!barUp) volPctW_.Snap(pw);
+            else volPctW_.To(pw, anim ? 200.f : 0.f);
+        }
+        volLevel_ = level;
+        volMuted_ = muted;
+        volMessage_ = std::move(message);
+        volT_.To(1.f, anim ? 200.f : 0.f);
+        SetTimer(hwnd_, kTimerVolumeHide, volMessage_.empty() ? 1400 : 2400, nullptr);
+        StartAnimation();
+        Render();
     }
 
     void SetHover(int h) {
@@ -5149,6 +7311,15 @@ class Widget {
                     Render();
                 }
                 return 0;
+            case WM_MOUSEWHEEL:
+                OnWheel(GET_WHEEL_DELTA_WPARAM(wp), GET_KEYSTATE_WPARAM(wp));
+                return 0;
+            case WM_TP_VOLUME:
+                if (wp & kVolFailed) ShowVolume(-1, false, L"Volume unavailable");
+                else
+                    ShowVolume((int)(wp & 0xFF), (wp & kVolMuted) != 0, L"",
+                               (wp & kVolHasBefore) ? (int)((wp >> 16) & 0xFF) : -1);
+                return 0;
             case WM_NOTIFY: {
                 auto* hdr = (NMHDR*)lp;
                 if (hdr->hwndFrom == tooltip_ && hdr->code == TTN_GETDISPINFOW) {
@@ -5163,12 +7334,28 @@ class Widget {
             case WM_TIMER:
                 if (wp == kTimerAnim) {
                     Animate();
+                } else if (wp == kTimerVolumeSend) {
+                    KillTimer(hwnd_, kTimerVolumeSend);
+                    if (pendingSpotifyVolume_ >= 0) {
+                        SendAct(Act::Volume, pendingSpotifyVolume_);
+                        lastSpotifyVolumeSend_ = Tick();
+                        pendingSpotifyVolume_ = -1;
+                    }
+                } else if (wp == kTimerVolumeHide) {
+                    KillTimer(hwnd_, kTimerVolumeHide);
+                    volT_.To(0.f, GetSettings()->popupAnimations ? 260.f : 0.f);
+                    StartAnimation();
+                    Render();
                 } else if (wp == kTimerHousekeeping) {
                     RECT rc{};
                     GetClientRect(taskbar_, &rc);
                     UINT dpi = GetDpiForWindow(taskbar_);
+                    float scale = (dpi ? dpi : 96) / 96.f;
+#ifdef TP_HARNESS
+                    if (g_testScale > 0) scale = g_testScale;
+#endif
                     if (rc.bottom - rc.top != heightPx_ || rc.right - rc.left != tbClientWidth_ ||
-                        std::fabs((dpi ? dpi : 96) / 96.f - scale_) > 0.001f) {
+                        std::fabs(scale - scale_) > 0.001f) {
                         Relayout();
                     } else if (overlay_) {
                         RECT tr{};
@@ -5198,8 +7385,11 @@ class Widget {
                 return 0;
             case WM_NCDESTROY: {
                 HWND h = hwnd_;
+                viz_.Destroy();
                 KillTimer(h, kTimerAnim);
                 KillTimer(h, kTimerHousekeeping);
+                KillTimer(h, kTimerVolumeSend);
+                KillTimer(h, kTimerVolumeHide);
                 surf_.Release();
                 SetWindowLongPtrW(h, GWLP_USERDATA, 0);
                 hwnd_ = nullptr;
@@ -5239,6 +7429,22 @@ class Widget {
     int hlPart_ = kNone;  // part whose highlight is fading
     Tween hlT_, playT_;
     std::wstring tipText_;
+
+    Visualizer viz_;
+    bool slotAnim_ = false;
+
+    // Scroll volume.
+    float wheelAcc_ = 0;
+    ULONGLONG wheelTick_ = 0;
+    int pendingSpotifyVolume_ = -1;
+    ULONGLONG lastSpotifyVolumeSend_ = 0;
+    Tween volT_;      // volume indicator visibility (rolls in and out)
+    Tween volFillT_;  // the bar's level, 0..100, follows changes smoothly
+    Tween volBumpT_;  // 1 right after a change, fading to 0
+    Tween volPctW_;   // width of the percentage text (px), slides when digits change
+    int volLevel_ = -1;
+    bool volMuted_ = false;
+    std::wstring volMessage_;
 };
 
 }  // namespace tp
@@ -5248,48 +7454,6 @@ namespace tp {
 // ============================================================================
 // Opening the source app / track
 // ============================================================================
-
-static const PROPERTYKEY kPKEY_AppUserModel_ID = {
-    {0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}}, 5};
-
-struct FindWindowCtx {
-    std::wstring aumid, exe;
-    HWND found = nullptr;
-};
-
-static BOOL CALLBACK FindAppWindowProc(HWND hwnd, LPARAM lp) {
-    auto* ctx = (FindWindowCtx*)lp;
-    if (!IsWindowVisible(hwnd) || GetWindow(hwnd, GW_OWNER)) return TRUE;
-    if (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) return TRUE;
-    if (GetWindowTextLengthW(hwnd) == 0) return TRUE;
-    com_ptr<IPropertyStore> store;
-    if (SUCCEEDED(SHGetPropertyStoreForWindow(hwnd, __uuidof(IPropertyStore), store.put_void()))) {
-        PROPVARIANT pv;
-        PropVariantInit(&pv);
-        if (SUCCEEDED(store->GetValue(kPKEY_AppUserModel_ID, &pv)) && pv.vt == VT_LPWSTR &&
-            pv.pwszVal && _wcsicmp(pv.pwszVal, ctx->aumid.c_str()) == 0) {
-            ctx->found = hwnd;
-        }
-        PropVariantClear(&pv);
-        if (ctx->found) return FALSE;
-    }
-    if (!ctx->exe.empty()) {
-        DWORD pid = 0;
-        GetWindowThreadProcessId(hwnd, &pid);
-        HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-        if (proc) {
-            wchar_t path[MAX_PATH * 2];
-            DWORD len = ARRAYSIZE(path);
-            if (QueryFullProcessImageNameW(proc, 0, path, &len)) {
-                const wchar_t* name = wcsrchr(path, L'\\');
-                name = name ? name + 1 : path;
-                if (_wcsicmp(name, ctx->exe.c_str()) == 0) ctx->found = hwnd;
-            }
-            CloseHandle(proc);
-        }
-    }
-    return ctx->found ? FALSE : TRUE;
-}
 
 static void ActivateApp(const std::wstring& aumid) {
     if (aumid.empty()) return;
@@ -5342,18 +7506,6 @@ static std::wstring WindowDesc(HWND h) {
         CloseHandle(proc);
     }
     return std::wstring(cls) + L" (" + exe + L")";
-}
-
-static std::wstring ThisComputerName() {
-    static std::wstring name = [] {
-        wchar_t buf[256];
-        DWORD len = ARRAYSIZE(buf);
-        if (GetComputerNameExW(ComputerNameDnsHostname, buf, &len)) return std::wstring(buf, len);
-        len = ARRAYSIZE(buf);
-        if (GetComputerNameW(buf, &len)) return std::wstring(buf, len);
-        return std::wstring();
-    }();
-    return name;
 }
 
 static std::wstring DeviceTypeLabel(const std::wstring& type) {
@@ -6894,6 +9046,9 @@ static void RegisterClasses() {
     wc.lpfnWndProc = Widget::Proc;
     wc.lpszClassName = Widget::kClass;
     RegisterClassExW(&wc);
+    wc.lpfnWndProc = Visualizer::Proc;
+    wc.lpszClassName = Visualizer::kClass;
+    RegisterClassExW(&wc);
     wc.lpfnWndProc = Popup::Proc;
     wc.lpszClassName = Popup::kClass;
     RegisterClassExW(&wc);
@@ -6905,6 +9060,7 @@ static void RegisterClasses() {
 
 static void UnregisterClasses() {
     UnregisterClassW(Widget::kClass, ModuleInstance());
+    UnregisterClassW(Visualizer::kClass, ModuleInstance());
     UnregisterClassW(Popup::kClass, ModuleInstance());
     UnregisterClassW(Popup::kClassComposited, ModuleInstance());
 }
@@ -7087,6 +9243,8 @@ static void ModUninit() {
     }
     g_attached = false;
     g_taskbarHwnd = nullptr;
+    g_tap.Shutdown();
+    g_vol.Stop();
     Http::CancelAll();
     g_core.Sync([] { g_controller.Shutdown(); });
     g_img.Sync([] { ReleaseImgThreadObjects(); });

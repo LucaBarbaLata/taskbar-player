@@ -233,6 +233,7 @@ class Surface : public Canvas {
         old_ = nullptr;
         bits_ = nullptr;
         w = h = 0;
+        boundW_ = boundH_ = -1;
     }
 
     bool Resize(int nw, int nh) {
@@ -257,6 +258,7 @@ class Surface : public Canvas {
         if (!old_) old_ = prev;
         if (bmp_) DeleteObject(bmp_);
         bmp_ = bmp;
+        boundW_ = boundH_ = -1;  // bind the render target to the new bitmap
         bits_ = bits;
         w = nw;
         h = nh;
@@ -267,14 +269,20 @@ class Surface : public Canvas {
         if (!dc_) return nullptr;
         if (!rt_) {
             D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
-                D2D1_RENDER_TARGET_TYPE_DEFAULT,
+                software ? D2D1_RENDER_TARGET_TYPE_SOFTWARE : D2D1_RENDER_TARGET_TYPE_DEFAULT,
                 D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.f,
                 96.f, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_FEATURE_LEVEL_DEFAULT);
             if (FAILED(g_gfx->D2D()->CreateDCRenderTarget(&props, rt_.put()))) return nullptr;
             gen++;
         }
-        RECT rc{0, 0, w, h};
-        if (FAILED(rt_->BindDC(dc_, &rc))) return nullptr;
+        // Binding is only needed when the bitmap changed (it is costly per frame).
+        if (boundW_ != w || boundH_ != h || boundGen_ != gen) {
+            RECT rc{0, 0, w, h};
+            if (FAILED(rt_->BindDC(dc_, &rc))) return nullptr;
+            boundW_ = w;
+            boundH_ = h;
+            boundGen_ = gen;
+        }
         rt_->BeginDraw();
         rt_->SetTransform(D2D1::Matrix3x2F::Identity());
         rt_->Clear(D2D1_COLOR_F{0, 0, 0, 0});
@@ -307,7 +315,13 @@ class Surface : public Canvas {
     ID2D1RenderTarget* Target() const override { return rt_.get(); }
     const void* Bits() const { return bits_; }
 
+    // Draw on the CPU: cheaper for small surfaces redrawn every frame (no
+    // copy back from the GPU). Set before the first Begin().
+    bool software = false;
+
    private:
+    int boundW_ = -1, boundH_ = -1;
+    uint32_t boundGen_ = ~0u;
     HDC dc_ = nullptr;
     HBITMAP bmp_ = nullptr;
     HGDIOBJ old_ = nullptr;

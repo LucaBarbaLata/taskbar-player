@@ -2,8 +2,8 @@
 // @id              taskbar-player
 // @name            Taskbar Player
 // @description     A compact now-playing widget on the left side of the taskbar with a popup player and Spotify Connect support
-// @version         1.1.0
-// @author          Luca
+// @version         1.2.0
+// @author          lucariki
 // @include         explorer.exe
 // @architecture    x86-64
 // @compilerOptions -lole32 -loleaut32 -luuid -lwindowsapp -lwinhttp -lws2_32 -lcrypt32 -lbcrypt -ld2d1 -ldwrite -lwindowscodecs -lgdi32 -luser32 -lshell32 -lshlwapi -lcomctl32 -lversion -luxtheme -ld3d11 -ldxgi -ldcomp -ldwmapi -lcoremessaging
@@ -27,6 +27,16 @@ A small now-playing widget that lives on the left side of the taskbar.
   any of your devices (phone, speaker, TV, ...). Spotify always has priority.
 * Shares what it shows with the Glyph Lock Screen mod, which can then display
   and control Spotify Connect playback on the lock screen.
+* **Scroll to change the volume**: scroll the mouse wheel over the widget.
+  For Spotify it changes Spotify's own volume (also on your phone or a
+  speaker); for other apps it changes their slider in the Windows Volume
+  Mixer. Hold Shift for 1% steps. Can also change the Windows master volume
+  instead.
+* **Audio visualizer** next to the playback buttons while sound plays on this
+  PC: bars, mirrored bars, a smooth line, LED dots or a wave, with many
+  options (size, colors, speed, sensitivity, ...) in the settings. It only
+  listens to what the PC plays (like screen recorders do); nothing is
+  recorded or saved.
 
 The widget hides itself when nothing is playing.
 
@@ -57,6 +67,11 @@ Notes:
   often as needed and backs off while it's blocked.
 * If the widget doesn't appear on the taskbar, turn on **Compatibility mode**
   in the settings.
+* Scrolling over the widget needs the Windows setting "Scroll inactive
+  windows when I hover over them" (on by default).
+* The visualizer's "Only the app shown on the widget" source needs Windows 11
+  (or Windows 10 21H2+). With "Everything playing on this PC" it also reacts
+  to other sounds, unless "Only while the shown track plays on this PC" is on.
 */
 // ==/WindhawkModReadme==
 
@@ -117,6 +132,115 @@ Notes:
   $description: >-
     Draw the widget as a separate window on top of the taskbar instead of
     embedding it. Try this if the widget doesn't show up.
+- scrollVolume:
+  - enabled: true
+    $name: Scroll on the widget to change the volume
+  - target: app
+    $name: What scrolling changes
+    $options:
+    - app: The playing app (Spotify's volume, or the app's Volume Mixer slider)
+    - system: Windows master volume
+  - step: 5
+    $name: Step per scroll notch (%)
+    $description: Hold Shift while scrolling for 1% steps.
+  - invert: false
+    $name: Reverse scroll direction
+  - indicator: true
+    $name: Show the volume on the widget while scrolling
+  $name: Scroll volume
+- visualizer:
+  - enabled: true
+    $name: Show an audio visualizer
+    $description: >-
+      Moves with the sound playing on this PC. It only listens to what the PC
+      plays; nothing is recorded or saved.
+  - style: bars
+    $name: Style
+    $options:
+    - bars: Bars
+    - mirrored: Mirrored bars
+    - line: Smooth line
+    - dots: Dots (LED meter)
+    - wave: Wave (oscilloscope)
+  - position: afterControls
+    $name: Position
+    $options:
+    - afterControls: Right of the playback buttons
+    - beforeControls: Left of the playback buttons
+    - beforeCover: Left of the cover
+  - width: 32
+    $name: Width
+    $description: In pixels at 100% scaling (8-200).
+  - height: 20
+    $name: Height
+    $description: In pixels at 100% scaling (4-48, at most the taskbar height).
+  - bars: 6
+    $name: Number of bars
+    $description: Also the number of points of the smooth line (2-48).
+  - gap: 2
+    $name: Gap between bars
+    $description: In pixels at 100% scaling.
+  - roundness: 100
+    $name: Roundness (%)
+    $description: 0 gives square bars and dots, 100 fully rounded ones.
+  - peaks: false
+    $name: Falling peak markers
+  - mirror: false
+    $name: Bass on the right
+  - colorMode: accent
+    $name: Color
+    $options:
+    - accent: From the album cover
+    - text: Taskbar text color
+    - custom: Custom color
+    - gradient: Gradient (custom color to second color)
+    - rainbow: Rainbow
+  - color: "FF1ED760"
+    $name: Custom color
+    $description: >-
+      RRGGBB or AARRGGBB. Used by "Custom color", and as the start of the
+      gradient (at the base of the bars).
+  - color2: "FFB15CFF"
+    $name: Second gradient color
+    $description: RRGGBB or AARRGGBB. The end of the gradient (at the tips of the bars).
+  - opacity: 100
+    $name: Opacity (%)
+  - sensitivity: 100
+    $name: Sensitivity (%)
+    $description: Higher makes the bars taller (10-400).
+  - autoLevel: true
+    $name: Auto level
+    $description: Adapts to the loudness, so quiet and loud music look alike.
+  - riseSpeed: 80
+    $name: Rise speed (1-100)
+  - fallSpeed: 35
+    $name: Fall speed (1-100)
+  - frameRate: 60
+    $name: Frames per second
+    $description: 10-120. Lower uses less CPU.
+  - minFrequency: 50
+    $name: Lowest frequency (Hz)
+  - maxFrequency: 10000
+    $name: Highest frequency (Hz)
+  - source: all
+    $name: Audio source
+    $options:
+    - all: Everything playing on this PC
+    - app: Only the app shown on the widget
+  - onlyWhenPlaying: true
+    $name: Only while the shown track plays on this PC
+    $description: >-
+      Ignores other sounds (notifications, videos) while the widget shows
+      paused music or music playing on another device.
+  - whenSilent: shrink
+    $name: When it's silent
+    $options:
+    - shrink: Fade out and make the widget narrower
+    - keep: Fade out but keep the space
+    - rest: Keep showing flat bars
+  - silenceDelay: 2
+    $name: Seconds of silence before it hides
+  $name: Audio visualizer
 */
 // ==/WindhawkModSettings==
 
@@ -142,6 +266,11 @@ Notes:
 #include <shlwapi.h>
 #include <shobjidl.h>
 #include <tlhelp32.h>
+#include <appmodel.h>
+#include <mmdeviceapi.h>
+#include <audioclient.h>
+#include <audiopolicy.h>
+#include <endpointvolume.h>
 #include <uiautomation.h>
 #include <uxtheme.h>
 #include <wincodec.h>
@@ -920,6 +1049,35 @@ struct Settings {
     bool popupAnimations = true;
     bool popupClassic = false;  // force the DirectComposition + DWM blur popup
     bool overlayMode = false;
+
+    struct Scroll {
+        bool enabled = true;
+        bool system = false;  // Windows master volume instead of the playing app
+        int step = 5;         // percent per wheel notch
+        bool invert = false;
+        bool indicator = true;
+    } scroll;
+
+    struct Viz {
+        bool enabled = true;
+        enum class Style { Bars, Mirrored, Line, Dots, Wave } style = Style::Bars;
+        enum class Pos { BeforeControls, AfterControls, BeforeCover } position = Pos::AfterControls;
+        int width = 32, height = 20;  // px at 100%
+        int bars = 6, gap = 2;
+        int roundness = 100;  // percent
+        bool peaks = false, mirror = false;
+        enum class Color { Accent, Text, Custom, Gradient, Rainbow } colorMode = Color::Accent;
+        uint32_t color = 0xFF1ED760, color2 = 0xFFB15CFF;  // AARRGGBB
+        int opacity = 100, sensitivity = 100;
+        bool autoLevel = true;
+        int riseSpeed = 80, fallSpeed = 35;
+        int frameRate = 60;
+        int minHz = 50, maxHz = 10000;
+        bool appOnly = false;  // capture only the app shown on the widget
+        bool onlyWhenPlaying = true;
+        enum class Silent { Shrink, Keep, Rest } whenSilent = Silent::Shrink;
+        int silenceDelayMs = 2000;
+    } viz;
 };
 
 // Parses "AARRGGBB" or "RRGGBB" (optionally with a leading '#').
@@ -942,6 +1100,63 @@ static std::shared_ptr<const Settings> g_settings = std::make_shared<Settings>()
 static std::shared_ptr<const Settings> GetSettings() {
     std::lock_guard<std::mutex> lock(g_settingsMutex);
     return g_settings;
+}
+
+static std::wstring StringSetting(const wchar_t* name) {
+    PCWSTR v = Wh_GetStringSetting(name);
+    std::wstring s = v ? v : L"";
+    Wh_FreeStringSetting(v);
+    return s;
+}
+
+static int IntSetting(const wchar_t* name, int lo, int hi) {
+    return std::clamp(Wh_GetIntSetting(name), lo, hi);
+}
+
+static void LoadVisualizerSettings(Settings::Viz& v) {
+    using V = Settings::Viz;
+    v.enabled = Wh_GetIntSetting(L"visualizer.enabled") != 0;
+    std::wstring style = StringSetting(L"visualizer.style");
+    v.style = style == L"mirrored" ? V::Style::Mirrored
+              : style == L"line"   ? V::Style::Line
+              : style == L"dots"   ? V::Style::Dots
+              : style == L"wave"   ? V::Style::Wave
+                                   : V::Style::Bars;
+    std::wstring pos = StringSetting(L"visualizer.position");
+    v.position = pos == L"beforeControls" ? V::Pos::BeforeControls
+                 : pos == L"beforeCover"  ? V::Pos::BeforeCover
+                                          : V::Pos::AfterControls;
+    v.width = IntSetting(L"visualizer.width", 8, 200);
+    v.height = IntSetting(L"visualizer.height", 4, 48);
+    v.bars = IntSetting(L"visualizer.bars", 2, 48);
+    v.gap = IntSetting(L"visualizer.gap", 0, 20);
+    v.roundness = IntSetting(L"visualizer.roundness", 0, 100);
+    v.peaks = Wh_GetIntSetting(L"visualizer.peaks") != 0;
+    v.mirror = Wh_GetIntSetting(L"visualizer.mirror") != 0;
+    std::wstring color = StringSetting(L"visualizer.colorMode");
+    v.colorMode = color == L"text"       ? V::Color::Text
+                  : color == L"custom"   ? V::Color::Custom
+                  : color == L"gradient" ? V::Color::Gradient
+                  : color == L"rainbow"  ? V::Color::Rainbow
+                                         : V::Color::Accent;
+    if (!ParseArgb(StringSetting(L"visualizer.color"), v.color)) v.color = 0xFF1ED760;
+    if (!ParseArgb(StringSetting(L"visualizer.color2"), v.color2)) v.color2 = 0xFFB15CFF;
+    v.opacity = IntSetting(L"visualizer.opacity", 0, 100);
+    v.sensitivity = IntSetting(L"visualizer.sensitivity", 10, 400);
+    v.autoLevel = Wh_GetIntSetting(L"visualizer.autoLevel") != 0;
+    v.riseSpeed = IntSetting(L"visualizer.riseSpeed", 1, 100);
+    v.fallSpeed = IntSetting(L"visualizer.fallSpeed", 1, 100);
+    v.frameRate = IntSetting(L"visualizer.frameRate", 10, 120);
+    v.minHz = IntSetting(L"visualizer.minFrequency", 20, 15000);
+    v.maxHz = IntSetting(L"visualizer.maxFrequency", 100, 22000);
+    if (v.maxHz < v.minHz * 2) v.maxHz = std::min(22000, v.minHz * 2);
+    v.appOnly = StringSetting(L"visualizer.source") == L"app";
+    v.onlyWhenPlaying = Wh_GetIntSetting(L"visualizer.onlyWhenPlaying") != 0;
+    std::wstring silent = StringSetting(L"visualizer.whenSilent");
+    v.whenSilent = silent == L"keep"   ? V::Silent::Keep
+                   : silent == L"rest" ? V::Silent::Rest
+                                       : V::Silent::Shrink;
+    v.silenceDelayMs = IntSetting(L"visualizer.silenceDelay", 0, 600) * 1000;
 }
 
 static void LoadSettings() {
@@ -978,8 +1193,27 @@ static void LoadSettings() {
         Wh_FreeStringSetting(engine);
     }
     s->overlayMode = Wh_GetIntSetting(L"overlayMode") != 0;
+    s->scroll.enabled = Wh_GetIntSetting(L"scrollVolume.enabled") != 0;
+    s->scroll.system = StringSetting(L"scrollVolume.target") == L"system";
+    s->scroll.step = IntSetting(L"scrollVolume.step", 1, 25);
+    s->scroll.invert = Wh_GetIntSetting(L"scrollVolume.invert") != 0;
+    s->scroll.indicator = Wh_GetIntSetting(L"scrollVolume.indicator") != 0;
+    LoadVisualizerSettings(s->viz);
     std::lock_guard<std::mutex> lock(g_settingsMutex);
     g_settings = s;
+}
+
+// The name Spotify gives this PC as a Connect device.
+static std::wstring ThisComputerName() {
+    static std::wstring& name = *new std::wstring([] {
+        wchar_t buf[256];
+        DWORD len = ARRAYSIZE(buf);
+        if (GetComputerNameExW(ComputerNameDnsHostname, buf, &len)) return std::wstring(buf, len);
+        len = ARRAYSIZE(buf);
+        if (GetComputerNameW(buf, &len)) return std::wstring(buf, len);
+        return std::wstring();
+    }());
+    return name;
 }
 
 }  // namespace tp
