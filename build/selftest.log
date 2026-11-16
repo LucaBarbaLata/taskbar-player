@@ -1,0 +1,78 @@
+[pkce]
+  ok   Base64Url(h, 32) == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+  ok   t.size() == 64
+[encoding]
+  ok   UrlEncode("spotify:track:7a3 b") == "spotify%3Atrack%3A7a3%20b"
+  ok   UrlDecode("a%3Ab+c") == "a:b c"
+  ok   q["code"] == "AQB/x" && q["state"] == "xyz" && q.count("empty")
+  ok   UnprotectSecret(ProtectSecret(secret)) == secret
+  ok   JsonEscape("a\"b\\c") == "a\\\"b\\\\c"
+[json]
+  ok   Json::Parse(body, j)
+  ok   st.ok && st.hasDevice && st.playing
+  ok   st.device.name == L"Kitchen" && st.device.volume == 42 && st.device.supportsVolume
+  ok   st.title == L"Song" && st.artist == L"A, B \U0001F3B5" && st.album == L"Album é"
+  ok   st.imageUrl == L"https://i.scdn.co/640"
+  ok   st.progressMs == 61234 && st.durationMs == 200000
+  ok   st.shuffle && st.repeat == RepeatMode::Track
+  ok   st.disResume && st.disPrev && !st.disNext
+  ok   Json::Parse(ep, je)
+  ok   se.type == "episode" && se.artist == L"The Show" && se.imageUrl == L"https://i/s"
+  ok   !se.device.supportsVolume && se.device.volume == -1
+  ok   Json::Parse(R"({"device":{"id":"x","name":"PC"},"currently_playing_type":"ad","item":null,"is_playing":true})", ad)
+  ok   sa.type == "ad" && sa.title == L"Advertisement"
+  ok   !Json::Parse("{\"a\":", bad)
+  ok   !Json::Parse("[1,2", bad)
+  ok   Json::Parse("[true,false]", arr) && arr.size() == 2 && arr[0].Bool() && !arr[1].Bool(true)
+[poll pacing]
+  ok   p.interval == 1000
+  ok   p.interval == 1000
+  ok   p.interval == 1500
+  ok   p.interval == 1500
+  ok   p.interval == 4000
+  ok   p.interval == 4000
+  ok   p.interval == 3750
+  ok   p.interval == 1000
+[rate limit families]
+  ok   FamilyOf(L"/me/player?additional_types=episode") == ApiFamily::Player
+  ok   FamilyOf(L"/me/player/next") == ApiFamily::Player
+  ok   FamilyOf(L"/me/library/contains?uris=x") == ApiFamily::Library
+  ok   FamilyOf(L"/me/library?uris=x") == ApiFamily::Library
+  ok   lib.status == 429 && lib.throttled
+  ok   !player.throttled
+[387:Trace] Waiting 400 ms for Spotify's rate limit before /me/player/next
+  waited 422 ms
+  ok   waited >= 350 && waited < 1000
+  ok   Tick() >= g_retryUntil[(int)ApiFamily::Player]
+[network]
+  GET /me/player without a token -> 401
+  ok   r.status == 401
+[sign-in listener]
+[387:Trace] Sign-in started (client id length 19, port 8974)
+[387:Trace] Listening on 127.0.0.1:8974
+  ok   openedUrl.find("redirect_uri=http%3A%2F%2F127.0.0.1%3A8974%2Fcallback") != std::string::npos
+  ok   openedUrl.find("code_challenge_method=S256") != std::string::npos
+[387:Trace] Sign-in listener got a request for /nope
+  ok   wrong.status == 404
+[387:Trace] Sign-in listener got a request for /callback
+  ok   cb.status == 200 && cb.body.find("You're connected") != std::string::npos
+[387:Trace] Token exchange failed: 400 invalid_client
+[387:Trace] Sign-in finished: success=0 cancelled=0 error='Spotify sign-in failed (400)'
+  ok   !g_auth.HasToken()
+[remote feed]
+  ok   mapping != nullptr
+  ok   r && r->magic == kFeedMagic && (r->seq & 1) == 0
+  ok   r && r->source == 1 && r->playing == 1 && r->controls == 6
+  ok   r && std::wstring(r->title) == L"Song" && std::wstring(r->artist) == L"Artist"
+  ok   r && std::wstring(r->device) == L"Kitchen" && std::wstring(r->app) == L"Spotify"
+  ok   r && std::wstring(r->artUrl) == L"https://i.scdn.co/image/abc"
+  ok   r && r->durMs == 200000 && r->posMs >= 1000 && r->posMs < 3000
+  ok   r && r->stampMs > 1700000000000ULL && r->posStampMs == r->stampMs
+  ok   r && wcslen(r->title) == 255 && std::wstring(r->artist) == L"Artist"
+  ok   ev != nullptr
+[387:Trace] Remote command 2
+  ok   r->command == kFeedNone
+  ok   r && r->source == 0 && r->title[0] == 0
+  ok   r && r->source == 0
+
+all tests passed

@@ -1,0 +1,5 @@
+In file included from C:/Users/Luca/Desktop/taskbar-player/taskbar-player.wh.cpp:122:
+C:/Program Files/Windhawk/Compiler/include/winsock2.h:15:2: warning: Please include winsock2.h before windows.h [-W#warnings]
+   15 | #warning Please include winsock2.h before windows.h
+      |  ^
+1 warning generated.
