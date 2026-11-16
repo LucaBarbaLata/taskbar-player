@@ -7124,12 +7124,12 @@ class Widget {
         // The number sits right after the bar; the bar takes the rest. When
         // the number gets a digit more or less, the bar's end slides.
         float pctW = volPctW_.value > 0 ? volPctW_.value : TextWidth(pct, ArtistFont());
-        float gap = S(8);  // room for the knob
+        float gap = S(6);
         float barL = r.left + iconW + S(6), barR = r.right - pctW - gap;
         if (barR - barL >= S(8)) {
-            // Like the popup's slider while it's used: thicker, in the cover's
-            // accent color, with a knob. Each step makes it pop, then it
-            // settles back to white.
+            // Like the popup's slider while it's used: thicker and in the
+            // cover's accent color. Each step makes it pop, then it settles
+            // back to white.
             float bh = S(4) + S(2) * bump;
             float dim = volMuted_ ? 0.4f : 1.f;
             D2D1_RECT_F track = RectF(barL, cy - bh / 2, barR, cy + bh / 2);
@@ -7145,8 +7145,6 @@ class Widget {
                 rt->FillRoundedRectangle(
                     D2D1::RoundedRect(RectF(barL, cy - bh / 2, std::max(fill, barL + bh), cy + bh / 2), bh / 2, bh / 2),
                     surf_.Brush(WithAlpha(fillCol, fillCol.a * a * dim)));
-            float kr = S(3.5f) + S(2.5f) * bump;
-            rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(fill, cy), kr, kr), surf_.Brush(WithAlpha(fg, fg.a * a * dim)));
             DrawTextLine(rt, pct, ArtistFont(), RectF(barR + gap, r.top, r.right, r.bottom),
                          surf_.Brush(WithAlpha(fg2, fg2.a * a)));
         } else {

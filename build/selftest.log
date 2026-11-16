@@ -77,7 +77,7 @@
   ok   lib.status == 429 && lib.throttled
   ok   !player.throttled
 [521:Trace] Waiting 400 ms for Spotify's rate limit before /me/player/next
-  waited 422 ms
+  waited 438 ms
   ok   waited >= 350 && waited < 1000
   ok   Tick() >= g_retryUntil[(int)ApiFamily::Player]
 [spectrum]
