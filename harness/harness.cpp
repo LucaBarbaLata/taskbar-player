@@ -375,6 +375,43 @@ static void RenderMode(const std::wstring& out, const std::wstring& image, int c
         }
     }
 
+    // Playback icons: big (a 512 px cell each, the icon 448 px tall, to
+    // compare with the reference artwork), then at the sizes the widget and the
+    // popup use at 100%, 125%, 150% and 200% scaling.
+    {
+        const Transport kinds[] = {Transport::Play, Transport::Prev, Transport::Pause, Transport::Next};
+        Surface big;
+        big.Resize(2048, 512);
+        if (ID2D1RenderTarget* rt = big.Begin()) {
+            for (int i = 0; i < 4; i++)
+                DrawTransport(rt, kinds[i], D2D1::Point2F(256.f + 512 * i, 256), 448 / 0.78f,
+                              big.Brush(Rgba(0x000000)));
+            big.End();
+            SavePng(big, out + L"\\transport_big.png", 0xFFFFFF);
+        }
+        Surface small;
+        small.Resize(620, 300);
+        if (ID2D1RenderTarget* rt = small.Begin()) {
+            const float scales[] = {1.f, 1.25f, 1.5f, 2.f};
+            for (int row = 0; row < 4; row++) {
+                float sc = scales[row], y = 30.f + 70 * row;
+                // Widget: 13 (prev/next) and 14 (play/pause) at this scale.
+                for (int i = 0; i < 4; i++) {
+                    float sz = (kinds[i] == Transport::Play || kinds[i] == Transport::Pause ? 14 : 13) * sc;
+                    DrawTransport(rt, kinds[i], D2D1::Point2F(30 + 34 * sc * i, y), sz, small.Brush(Rgba(0xFFFFFF)));
+                }
+                // Popup: 19 (prev/next) and 24 (play/pause).
+                for (int i = 0; i < 4; i++) {
+                    float sz = (kinds[i] == Transport::Play || kinds[i] == Transport::Pause ? 24 : 19) * sc;
+                    DrawTransport(rt, kinds[i], D2D1::Point2F(290 + 70 * sc * i / 1.5f, y), sz,
+                                  small.Brush(Rgba(0xFFFFFF)));
+                }
+            }
+            small.End();
+            SavePng(small, out + L"\\transport_small.png", 0x1B1B1F);
+        }
+    }
+
     auto snap = SpotifySnap(art);
     show(snap);
     InitTrace();

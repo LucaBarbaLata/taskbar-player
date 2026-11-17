@@ -4453,22 +4453,26 @@ static void DrawIcon(ID2D1RenderTarget* rt, Glyph g, D2D1_POINT_2F c, float px, 
     DrawGlyph(rt, (wchar_t)g, c, px, b);
 }
 
-// A triangle with rounded corners, built as a single filled path (arcs at the corners).
+// A triangle with rounded corners, built as a single filled path (arcs at the
+// corners). `round` holds the corner radius for a, b and c.
 static void FillRoundedTriangle(ID2D1RenderTarget* rt, D2D1_POINT_2F a, D2D1_POINT_2F b,
-                                D2D1_POINT_2F c, float round, ID2D1Brush* brush) {
+                                D2D1_POINT_2F c, const float (&round)[3], ID2D1Brush* brush) {
     D2D1_POINT_2F v[3] = {a, b, c};
     float cross = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
     if (std::fabs(cross) < 0.01f) return;
     D2D1_SWEEP_DIRECTION sweep =
         cross > 0 ? D2D1_SWEEP_DIRECTION_CLOCKWISE : D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE;
     D2D1_POINT_2F start[3], end[3];
+    float radius[3];
     for (int i = 0; i < 3; i++) {
         D2D1_POINT_2F p = v[(i + 2) % 3], q = v[i], n = v[(i + 1) % 3];
         float l1 = std::hypot(p.x - q.x, p.y - q.y), l2 = std::hypot(n.x - q.x, n.y - q.y);
         if (l1 <= 0 || l2 <= 0) return;
         D2D1_POINT_2F u1{(p.x - q.x) / l1, (p.y - q.y) / l1}, u2{(n.x - q.x) / l2, (n.y - q.y) / l2};
-        float angle = std::acos(std::clamp(u1.x * u2.x + u1.y * u2.y, -1.f, 1.f));
-        float d = std::min(round / std::tan(angle / 2), std::min(l1, l2) * 0.45f);
+        float half = std::acos(std::clamp(u1.x * u2.x + u1.y * u2.y, -1.f, 1.f)) / 2;
+        // Where the arc meets the two edges; a corner too round for its edges shrinks.
+        float d = std::min(round[i] / std::tan(half), std::min(l1, l2) * 0.45f);
+        radius[i] = d * std::tan(half);
         start[i] = D2D1_POINT_2F{q.x + u1.x * d, q.y + u1.y * d};
         end[i] = D2D1_POINT_2F{q.x + u2.x * d, q.y + u2.y * d};
     }
@@ -4480,7 +4484,7 @@ static void FillRoundedTriangle(ID2D1RenderTarget* rt, D2D1_POINT_2F a, D2D1_POI
     for (int k = 1; k <= 3; k++) {
         int i = k % 3;
         sink->AddLine(start[i]);
-        sink->AddArc(D2D1::ArcSegment(end[i], D2D1::SizeF(round, round), 0, sweep, D2D1_ARC_SIZE_SMALL));
+        sink->AddArc(D2D1::ArcSegment(end[i], D2D1::SizeF(radius[i], radius[i]), 0, sweep, D2D1_ARC_SIZE_SMALL));
     }
     sink->EndFigure(D2D1_FIGURE_END_CLOSED);
     sink->Close();
@@ -4489,32 +4493,38 @@ static void FillRoundedTriangle(ID2D1RenderTarget* rt, D2D1_POINT_2F a, D2D1_POI
 
 enum class Transport { Play, Pause, Prev, Next };
 
+// Playback icons: bold, solid shapes with soft round corners. They are laid
+// out on a grid where every icon is 448 units tall, centered on `c`, and
+// scaled so that height becomes 0.78 * s.
 static void DrawTransport(ID2D1RenderTarget* rt, Transport t, D2D1_POINT_2F c, float s,
                           ID2D1Brush* brush) {
-    float r = 0.075f * s;
+    const float u = 0.78f * s / 448.f;  // one grid unit in pixels
+    auto at = [&](float x, float y) { return D2D1_POINT_2F{c.x + x * u, c.y + y * u}; };
+    // A full-height bar with rounded ends, from x0 to x1.
+    auto bar = [&](float x0, float x1) {
+        D2D1_RECT_F r = RectF(c.x + std::min(x0, x1) * u, c.y - 224 * u, c.x + std::max(x0, x1) * u, c.y + 224 * u);
+        rt->FillRoundedRectangle(D2D1::RoundedRect(r, 48 * u, 48 * u), brush);
+    };
     switch (t) {
-        case Transport::Play:
-            FillRoundedTriangle(rt, {c.x - 0.30f * s, c.y - 0.40f * s}, {c.x + 0.42f * s, c.y},
-                                {c.x - 0.30f * s, c.y + 0.40f * s}, r, brush);
-            break;
-        case Transport::Pause: {
-            float w = 0.25f * s, h = 0.78f * s, gap = 0.16f * s;
-            rt->FillRoundedRectangle(
-                D2D1::RoundedRect(RectXYWH(c.x - gap / 2 - w, c.y - h / 2, w, h), r, r), brush);
-            rt->FillRoundedRectangle(D2D1::RoundedRect(RectXYWH(c.x + gap / 2, c.y - h / 2, w, h), r, r),
-                                     brush);
+        case Transport::Play: {
+            // Nudged right of the box center so it looks centered in a round button.
+            const float dx = 16;
+            FillRoundedTriangle(rt, at(dx - 192, -266), at(dx + 244, 0), at(dx - 192, 266),
+                                {54 * u, 57 * u, 54 * u}, brush);
             break;
         }
+        case Transport::Pause:
+            bar(-192, -32);
+            bar(32, 192);
+            break;
         case Transport::Prev:
         case Transport::Next: {
-            float dir = t == Transport::Next ? 1.f : -1.f;
-            float h = 0.72f * s;
-            float barW = 0.14f * s;
-            float barX = c.x + dir * 0.40f * s - (dir > 0 ? barW : 0);
-            rt->FillRoundedRectangle(
-                D2D1::RoundedRect(RectXYWH(barX, c.y - h / 2, barW, h), barW / 2, barW / 2), brush);
-            FillRoundedTriangle(rt, {c.x - dir * 0.40f * s, c.y - h / 2}, {c.x + dir * 0.20f * s, c.y},
-                                {c.x - dir * 0.40f * s, c.y + h / 2}, r, brush);
+            // Drawn for "next" (triangle pointing right, bar on the right);
+            // "previous" is the mirror image.
+            float m = t == Transport::Next ? 1.f : -1.f;
+            bar(m * 96, m * 224);
+            FillRoundedTriangle(rt, at(m * -224, -288), at(m * 89, 0), at(m * -224, 288),
+                                {50 * u, 52 * u, 50 * u}, brush);
             break;
         }
     }

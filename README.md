@@ -37,7 +37,7 @@ is used). From Git Bash:
 
 ```bash
 build/harness.exe selftest <outDir>                 # unit tests + Spotify endpoint checks
-build/harness.exe render <outDir> [image x y size]  # mock renders saved as PNG (+ visualizer_sheet.png)
+build/harness.exe render <outDir> [image x y size]  # mock renders saved as PNG (+ visualizer_sheet.png, transport_*.png icon sheets)
 build/harness.exe live <outDir> <seconds>            # real media sessions, saves PNG
 build/harness.exe audio <outDir> <seconds> [style] [all|app]  # real visualizer: levels + CPU use
 build/harness.exe tonetest <outDir>                  # capture check with a test tone (mutes the PC briefly)
